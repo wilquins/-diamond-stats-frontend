@@ -146,6 +146,7 @@ function gameProbabilities(p, pitcher) {
     abPerGame,
     favorable: perAb.favorable,
     pitcher: perAb.pitcher,
+    usedRealSplit: perAb.usedRealSplit, // faltaba copiar esto — por eso la vista "Por juego" (la que carga por defecto) nunca mostraba "(split real)"
   };
 }
 
@@ -1385,18 +1386,13 @@ function HitProbabilities({ player, pitcher }) {
         <div className="text-[11px] tracking-widest uppercase" style={{ color: "#8FA599" }}>
           Probabilidad de embasarse
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
           {pitcher && (
             <div
               className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
               style={{ background: p.favorable ? "#1A362A" : "#3A1E20", color: p.favorable ? "#FFB627" : "#E38A8E" }}
             >
               vs. {pitcher.name} ({pitcher.eraConfirmed ? `${pitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}) · {p.favorable ? "ventaja" : "desventaja"} de platoon {p.usedRealSplit ? "(split real)" : "(promedio liga)"}
-            </div>
-          )}
-          {pitcher && (
-            <div className="text-[9px] px-1.5 py-0.5 rounded w-full" style={{ background: "#0F251C", color: "#5A7368" }}>
-              DEBUG2: pitcher.hand={JSON.stringify(pitcher.hand)} · player.vsL={JSON.stringify(player.vsL)} · player.vsR={JSON.stringify(player.vsR)} · player.name={player.name}
             </div>
           )}
           <div className="flex rounded-lg border overflow-hidden" style={{ borderColor: "#1F3D30" }}>
