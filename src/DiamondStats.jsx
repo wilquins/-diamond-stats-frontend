@@ -631,6 +631,8 @@ function DailyPicks() {
                 {prob.toFixed(1)}%
               </div>
             </div>
+
+
           ))}
         </div>
         <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
@@ -1251,3 +1253,5 @@ function MiniStat({ label, value }) {
     </div>
   );
 }
+
+\\forzando redeploy
