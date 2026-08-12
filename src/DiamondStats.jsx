@@ -733,7 +733,7 @@ function TodayGamesHeader() {
   return (
     <div className="mb-6">
       <div className="text-[11px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Juegos de hoy</div>
-      <div className="flex gap-2.5 overflow-x-auto pb-2">
+      <div className="flex flex-col gap-2.5">
         {games.map((g) => {
           const isSelected = g.gamePk === selectedGamePk;
           const time = g.time
@@ -743,13 +743,13 @@ function TodayGamesHeader() {
             <button
               key={g.gamePk}
               onClick={() => selectGame(g)}
-              className="shrink-0 px-3.5 py-2.5 rounded-lg border text-left transition-colors"
-              style={{ background: isSelected ? "#17332688" : "#12281E", borderColor: isSelected ? "#FFB627" : "#1F3D30", minWidth: "160px" }}
+              className="w-full px-3.5 py-2.5 rounded-lg border text-left transition-colors flex items-center justify-between"
+              style={{ background: isSelected ? "#17332688" : "#12281E", borderColor: isSelected ? "#FFB627" : "#1F3D30" }}
             >
               <div className="text-xs font-semibold" style={{ color: "#EDEAE1" }}>
                 {g.awayCode || g.away} @ {g.homeCode || g.home}
               </div>
-              <div className="text-[10px] mt-0.5" style={{ color: "#8FA599" }}>{time} · {g.status}</div>
+              <div className="text-[10px]" style={{ color: "#8FA599" }}>{time} · {g.status}</div>
             </button>
           );
         })}
