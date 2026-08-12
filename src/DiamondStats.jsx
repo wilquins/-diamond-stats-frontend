@@ -261,9 +261,11 @@ let PITCHERS = {
 
 const LEAGUE_AVG_ERA = 4.00; // promedio histórico aproximado de MLB, usado como línea base
 
-// Promedio histórico aproximado de carreras COMBINADAS por juego en MLB
-// (ambos equipos sumados) — referencia general, no el dato exacto de 2026.
-const BASELINE_TOTAL_RUNS = 8.6;
+// Promedio REAL de carreras combinadas por juego en MLB temporada 2026,
+// calculado a partir de las carreras anotadas y juegos jugados de los 30
+// equipos (fuente: MLB.com Team Hitting Stats, al 11 ago 2026) — no es una
+// aproximación histórica, es el dato real de esta temporada específica.
+const BASELINE_TOTAL_RUNS = 8.94;
 
 // Distribución de Poisson — el modelo estadístico estándar para datos de
 // "conteo" como carreras anotadas en un juego. factorial() y poissonCDF()
@@ -863,7 +865,7 @@ function TodayGamesHeader() {
                     </div>
                   </div>
                   <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-                    Carreras totales esperadas: {expectedRuns.toFixed(1)} — combina el promedio histórico de MLB (~{BASELINE_TOTAL_RUNS}), el park factor de {stadium.park}, y el ERA de ambos abridores{bothErasConfirmed ? "" : " (uno o ambos sin ERA confirmado hoy, se usó el promedio de liga como neutral)"}, pasado por una distribución de Poisson. Es un modelo estadístico real, no una garantía — no incluye lineup del día, bullpen, ni clima específico.
+                    Carreras totales esperadas: {expectedRuns.toFixed(1)} — combina el promedio real de MLB esta temporada ({BASELINE_TOTAL_RUNS}, calculado de los 30 equipos), el park factor de {stadium.park}, y el ERA de ambos abridores{bothErasConfirmed ? "" : " (uno o ambos sin ERA confirmado hoy, se usó el promedio de liga como neutral)"}, pasado por una distribución de Poisson. Es un modelo estadístico real, no una garantía — no incluye lineup del día, bullpen, ni clima específico.
                   </p>
                 </div>
               </div>
