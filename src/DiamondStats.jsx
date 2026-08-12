@@ -826,6 +826,7 @@ export default function DiamondStats() {
   const [team, setTeam] = useState("Todos");
   const [selectedId, setSelectedId] = useState(PLAYERS[0].id);
   const [oppTeam, setOppTeam] = useState(null);
+  const [playerDetailOpen, setPlayerDetailOpen] = useState(false);
   const [liveStatus, setLiveStatus] = useState("cargando"); // "cargando" | "en-vivo" | "respaldo"
   const [liveHitters, setLiveHitters] = useState({}); // { [teamCode]: player[] } — roster en vivo por equipo
   const [hittersStatus, setHittersStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
@@ -1129,20 +1130,17 @@ export default function DiamondStats() {
           )}
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          {/* Lista de jugadores */}
-          <div className="lg:col-span-2 space-y-2.5">
-            {filtered.length === 0 && (
-              <div className="text-sm py-8 text-center" style={{ color: "#8FA599" }}>Sin resultados para "{query}"</div>
-            )}
-            {filtered.map((p) => (
-              <PlayerCard key={p.id} player={p} active={p.id === selected.id} onClick={() => setSelectedId(p.id)} />
-            ))}
-          </div>
-
-          {/* Panel de detalle */}
-          <div className="lg:col-span-3">
-            <div className="rounded-xl border p-6 sticky top-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+        {playerDetailOpen ? (
+        <div>
+          <button
+            onClick={() => setPlayerDetailOpen(false)}
+            className="text-[11px] font-semibold mb-3 flex items-center gap-1"
+            style={{ color: "#FFB627" }}
+          >
+            ← Volver a jugadores
+          </button>
+          <div className="max-w-2xl">
+            <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
               <div className="flex items-start justify-between mb-6">
                 <div>
                   <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>
@@ -1196,6 +1194,23 @@ export default function DiamondStats() {
             </div>
           </div>
         </div>
+        ) : (
+          <div>
+            {filtered.length === 0 && (
+              <div className="text-sm py-8 text-center" style={{ color: "#8FA599" }}>Sin resultados para "{query}"</div>
+            )}
+            <div className="space-y-2.5">
+              {filtered.map((p) => (
+                <PlayerCard
+                  key={p.id}
+                  player={p}
+                  active={p.id === selected.id}
+                  onClick={() => { setSelectedId(p.id); setPlayerDetailOpen(true); }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
         </>
         )}
 
