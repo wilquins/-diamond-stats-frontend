@@ -778,9 +778,41 @@ function TodayGamesHeader() {
 
         <div className="p-4 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
           <div className="text-sm font-bold mb-1" style={{ color: "#EDEAE1" }}>{selectedGame.away} @ {selectedGame.home}</div>
-          <div className="text-[11px] mb-3" style={{ color: "#8FA599" }}>
+          <div className="text-[11px] mb-4" style={{ color: "#8FA599" }}>
             {selectedGame.venue} · Abridores: {selectedGame.awayPitcher.name} vs. {selectedGame.homePitcher.name}
           </div>
+
+          {(() => {
+            const recHome = TEAM_RECORDS[selectedGame.homeCode];
+            const recAway = TEAM_RECORDS[selectedGame.awayCode];
+            const stadium = STADIUMS[selectedGame.homeCode];
+            if (!recHome || !recAway || !stadium) return null;
+            const baseProb = log5(recHome.wpct, recAway.wpct);
+            const { prob: homeWinProb, effectiveRunFactor } = adjustedHomeProb({
+              baseProb, stadium, wind: "neutro", temp: "templado",
+              home: selectedGame.homeCode, away: selectedGame.awayCode,
+            });
+            const awayWinProb = 1 - homeWinProb;
+            const runsLabel = effectiveRunFactor >= 1.05 ? "favorece más carreras" : effectiveRunFactor <= 0.95 ? "favorece menos carreras" : "entorno neutral";
+            return (
+              <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA)</div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span style={{ color: awayWinProb >= homeWinProb ? "#FFB627" : "#C9D6CD" }}>{selectedGame.away}</span>
+                    <span className="font-bold tabular-nums" style={{ color: awayWinProb >= homeWinProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(awayWinProb * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span style={{ color: homeWinProb > awayWinProb ? "#FFB627" : "#C9D6CD" }}>{selectedGame.home}</span>
+                    <span className="font-bold tabular-nums" style={{ color: homeWinProb > awayWinProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(homeWinProb * 100).toFixed(1)}%</span>
+                  </div>
+                </div>
+                <div className="text-[10px] mt-2.5 pt-2.5" style={{ color: "#8FA599", borderTop: "1px dashed #2A4D3B" }}>
+                  Entorno de carreras: <b style={{ color: "#EDEAE1" }}>{effectiveRunFactor.toFixed(2)}</b> ({runsLabel}) — combina el park factor de {stadium.park} con el ERA de ambos abridores. No es una probabilidad de over/under con línea específica, es una señal de si el juego tiende a más o menos anotación de lo normal.
+                </div>
+              </div>
+            );
+          })()}
 
           {hittersLoadStatus === "cargando" && (
             <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando probabilidades de los bateadores de ambos equipos…</p>
