@@ -677,6 +677,8 @@ export default function DiamondStats() {
   const [liveStatus, setLiveStatus] = useState("cargando"); // "cargando" | "en-vivo" | "respaldo"
   const [liveHitters, setLiveHitters] = useState({}); // { [teamCode]: player[] } — roster en vivo por equipo
   const [hittersStatus, setHittersStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
+  const [livePitchers, setLivePitchers] = useState({}); // { [teamCode]: player[] } — pitchers en vivo por equipo
+  const [pitchersStatus, setPitchersStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
   const [probablesStatus, setProbablesStatus] = useState("cargando"); // "cargando" | "en-vivo" | "sin-partidos" | "error"
 
   // Cuando el usuario filtra por un equipo específico (no "Todos"), traemos
@@ -704,6 +706,31 @@ export default function DiamondStats() {
         setHittersStatus("listo");
       })
       .catch(() => { if (!cancelled) setHittersStatus("error"); });
+    return () => { cancelled = true; };
+  }, [team]);
+
+  // Igual que arriba, pero para pitchers reales del equipo seleccionado.
+  useEffect(() => {
+    if (team === "Todos" || livePitchers[team]) return;
+    let cancelled = false;
+    setPitchersStatus("cargando");
+    fetch(`${BACKEND_URL}/api/team/${team}/pitchers`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled || !data.pitchers) return;
+        const mapped = data.pitchers
+          .filter((p) => p.era != null && p.whip != null && p.k9 != null && p.so != null && p.w != null && p.l != null)
+          .map((p, i) => ({
+            id: `live-pitcher-${team}-${i}`,
+            name: p.name, team, pos: p.gs > p.g / 2 ? "SP" : "RP", type: "pitcher",
+            throws: p.throws === "L" || p.throws === "R" ? p.throws : null,
+            era: p.era, whip: p.whip, so: p.so, ip: p.ip, w: p.w, l: p.l, k9: p.k9,
+            trend: "flat",
+          }));
+        setLivePitchers((prev) => ({ ...prev, [team]: mapped }));
+        setPitchersStatus("listo");
+      })
+      .catch(() => { if (!cancelled) setPitchersStatus("error"); });
     return () => { cancelled = true; };
   }, [team]);
 
@@ -775,11 +802,12 @@ export default function DiamondStats() {
   }, []);
 
   const combinedPlayers = useMemo(() => {
-    if (team === "Todos" || !liveHitters[team]) return PLAYERS;
+    if (team === "Todos") return PLAYERS;
     const curatedNames = new Set(PLAYERS.filter((p) => p.team === team).map((p) => p.name));
-    const extra = liveHitters[team].filter((p) => !curatedNames.has(p.name));
-    return [...PLAYERS, ...extra];
-  }, [team, liveHitters]);
+    const extraHitters = (liveHitters[team] || []).filter((p) => !curatedNames.has(p.name));
+    const extraPitchers = (livePitchers[team] || []).filter((p) => !curatedNames.has(p.name));
+    return [...PLAYERS, ...extraHitters, ...extraPitchers];
+  }, [team, liveHitters, livePitchers]);
 
   const filtered = useMemo(() => {
     return combinedPlayers.filter((p) => {
@@ -904,6 +932,14 @@ export default function DiamondStats() {
             )}
             {hittersStatus === "error" && (
               <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo traer el roster en vivo de {team} — mostrando solo los curados.</p>
+            )}
+            {pitchersStatus === "listo" && livePitchers[team]?.length > 0 && (
+              <p className="text-[11px]" style={{ color: "#3FC97A" }}>
+                +{livePitchers[team].length} pitchers en vivo de {team} agregados, con ERA, WHIP y K/9 reales de la temporada.
+              </p>
+            )}
+            {pitchersStatus === "error" && (
+              <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo traer el pitcheo en vivo de {team}.</p>
             )}
           </div>
         )}
