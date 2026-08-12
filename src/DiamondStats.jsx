@@ -550,11 +550,17 @@ function Predictor({ probablesStatus }) {
         )}
         {!stadium.roofed && weatherStatus === "listo" && weather && (
           <div className="mb-3">
-            <div className="flex items-center gap-3 mb-2">
-              <span style={{ fontSize: "28px" }}>{weather.icon}</span>
-              <div>
-                <div className="text-lg font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{weather.tempF.toFixed(1)}°F</div>
-                <div className="text-[10px]" style={{ color: "#8FA599" }}>{weather.description}</div>
+            <div className="flex items-start justify-between gap-3 mb-2 flex-wrap">
+              <div className="flex items-center gap-3">
+                <span style={{ fontSize: "28px" }}>{weather.icon}</span>
+                <div>
+                  <div className="text-lg font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{weather.tempF.toFixed(1)}°F</div>
+                  <div className="text-[10px]" style={{ color: "#8FA599" }}>{weather.description}</div>
+                </div>
+              </div>
+              <div className="flex flex-col items-center">
+                <WindFieldIcon deg={weather.windDirDeg} mph={weather.windMph} />
+                <div className="text-[10px] font-semibold mt-0.5" style={{ color: "#FFB627" }}>{weather.windMph.toFixed(0)} mph · {weather.windDir}</div>
               </div>
             </div>
             <div className="grid grid-cols-3 gap-2 text-[10px]" style={{ color: "#8FA599" }}>
@@ -562,6 +568,9 @@ function Predictor({ probablesStatus }) {
               <div>Viento: <b style={{ color: "#C9D6CD" }}>{weather.windMph.toFixed(1)} mph {weather.windDir}</b></div>
               <div>P.O.P: <b style={{ color: "#C9D6CD" }}>{weather.pop}%</b></div>
             </div>
+            <p className="text-[9px] mt-1.5 leading-relaxed" style={{ color: "#5A7368" }}>
+              La flecha muestra hacia dónde sopla el viento realmente (dato real). La orientación del diamante en el ícono es genérica — no es la orientación exacta de {stadium.park} (eso no lo tenemos digitalizado por estadio), así que úsala como referencia de dirección, no como definitiva para saber si entra o sale del jardín central.
+            </p>
           </div>
         )}
 
@@ -629,6 +638,45 @@ function PitcherCard({ team, pitcher, tag }) {
         {pitcher.hand === "L" ? "Zurdo" : pitcher.hand === "R" ? "Derecho" : "Mano no confirmada"} · {pitcher.eraConfirmed ? `${pitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}
       </div>
     </div>
+  );
+}
+
+// Ícono del campo (forma de home plate, como la del logo) con una flecha
+// que apunta hacia donde SOPLA el viento — usa los grados reales que
+// manda la API de clima. Los grados de "wind_direction" en meteorología
+// indican de DÓNDE viene el viento, así que la flecha se dibuja apuntando
+// hacia el lado opuesto (+180°), que es hacia donde empuja.
+function WindFieldIcon({ deg, mph, dirLabel }) {
+  const towardDeg = (deg + 180) % 360;
+  return (
+    <svg viewBox="0 0 140 140" width="100" height="100">
+      {/* Letras de puntos cardinales alrededor, para ubicar la flecha sin ambigüedad */}
+      <text x="70" y="14" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">N</text>
+      <text x="70" y="134" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">S</text>
+      <text x="10" y="74" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">O</text>
+      <text x="130" y="74" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">E</text>
+
+      {/* Campo de béisbol, mismo estilo que el logo */}
+      <path
+        d="M70 22 L112 58 L98 118 L42 118 L28 58 Z"
+        fill="#0B3D33"
+        stroke="#D97B3F"
+        strokeWidth="3.5"
+      />
+      <path
+        d="M70 92 L48 70 L70 48 L92 70 Z"
+        fill="none"
+        stroke="#EDEAE1"
+        strokeWidth="1.5"
+        opacity="0.5"
+      />
+
+      {/* Flecha del viento — apunta hacia donde SOPLA (no de dónde viene) */}
+      <g transform={`translate(70,70) rotate(${towardDeg})`}>
+        <line x1="0" y1="22" x2="0" y2="-24" stroke="#FFB627" strokeWidth="5" strokeLinecap="round" />
+        <path d="M-10,-14 L0,-28 L10,-14 Z" fill="#FFB627" stroke="#0B3D33" strokeWidth="1" />
+      </g>
+    </svg>
   );
 }
 
