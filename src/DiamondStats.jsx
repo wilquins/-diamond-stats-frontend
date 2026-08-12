@@ -261,6 +261,35 @@ let PITCHERS = {
 
 const LEAGUE_AVG_ERA = 4.00; // promedio histórico aproximado de MLB, usado como línea base
 
+// Promedio histórico aproximado de carreras COMBINADAS por juego en MLB
+// (ambos equipos sumados) — referencia general, no el dato exacto de 2026.
+const BASELINE_TOTAL_RUNS = 8.6;
+
+// Distribución de Poisson — el modelo estadístico estándar para datos de
+// "conteo" como carreras anotadas en un juego. factorial() y poissonCDF()
+// nos dejan calcular P(carreras totales <= k) dado un promedio esperado.
+function factorial(n) {
+  let r = 1;
+  for (let i = 2; i <= n; i++) r *= i;
+  return r;
+}
+function poissonCDF(k, lambda) {
+  let sum = 0;
+  for (let i = 0; i <= k; i++) {
+    sum += (Math.exp(-lambda) * Math.pow(lambda, i)) / factorial(i);
+  }
+  return sum;
+}
+
+// Estima una línea de Over/Under (siempre terminada en .5, como en la vida
+// real) y su probabilidad, a partir del total de carreras esperado.
+function estimateOverUnder(expectedRuns) {
+  const line = Math.round(expectedRuns - 0.5) + 0.5;
+  const under = poissonCDF(Math.floor(line), expectedRuns);
+  const over = 1 - under;
+  return { line, overProb: over, underProb: under };
+}
+
 // ---- Partido real confirmado para hoy (fuente: calendario oficial MLB, 10 ago 2026) ----
 // Houston está de visita en San Francisco en una serie de 3 juegos (10-12 ago) en Oracle Park.
 // Es el único cruce entre dos equipos de nuestra base que se juega hoy en la vida real.
@@ -793,11 +822,22 @@ function TodayGamesHeader() {
               home: selectedGame.homeCode, away: selectedGame.awayCode,
             });
             const awayWinProb = 1 - homeWinProb;
-            const runsLabel = effectiveRunFactor >= 1.05 ? "favorece más carreras" : effectiveRunFactor <= 0.95 ? "favorece menos carreras" : "entorno neutral";
+
+            // Over/Under real: combina el park factor (+ clima, ya incluido
+            // en effectiveRunFactor) con el ERA de AMBOS abridores de este
+            // juego específico, y lo pasa por una distribución de Poisson
+            // para sacar una probabilidad genuina, no solo una etiqueta.
+            const homeEra = selectedGame.homePitcher.era != null ? selectedGame.homePitcher.era : LEAGUE_AVG_ERA;
+            const awayEra = selectedGame.awayPitcher.era != null ? selectedGame.awayPitcher.era : LEAGUE_AVG_ERA;
+            const pitcherFactor = ((homeEra + awayEra) / 2) / LEAGUE_AVG_ERA;
+            const expectedRuns = BASELINE_TOTAL_RUNS * effectiveRunFactor * pitcherFactor;
+            const { line, overProb, underProb } = estimateOverUnder(expectedRuns);
+            const bothErasConfirmed = selectedGame.homePitcher.era != null && selectedGame.awayPitcher.era != null;
+
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
                 <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA)</div>
-                <div className="space-y-2">
+                <div className="space-y-2 mb-3">
                   <div className="flex items-center justify-between text-xs">
                     <span style={{ color: awayWinProb >= homeWinProb ? "#FFB627" : "#C9D6CD" }}>{selectedGame.away}</span>
                     <span className="font-bold tabular-nums" style={{ color: awayWinProb >= homeWinProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(awayWinProb * 100).toFixed(1)}%</span>
@@ -807,8 +847,24 @@ function TodayGamesHeader() {
                     <span className="font-bold tabular-nums" style={{ color: homeWinProb > awayWinProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(homeWinProb * 100).toFixed(1)}%</span>
                   </div>
                 </div>
-                <div className="text-[10px] mt-2.5 pt-2.5" style={{ color: "#8FA599", borderTop: "1px dashed #2A4D3B" }}>
-                  Entorno de carreras: <b style={{ color: "#EDEAE1" }}>{effectiveRunFactor.toFixed(2)}</b> ({runsLabel}) — combina el park factor de {stadium.park} con el ERA de ambos abridores. No es una probabilidad de over/under con línea específica, es una señal de si el juego tiende a más o menos anotación de lo normal.
+
+                <div className="pt-3" style={{ borderTop: "1px dashed #2A4D3B" }}>
+                  <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+                    Over/Under estimado · línea {line.toFixed(1)} carreras
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overProb >= underProb ? "#1A362A" : "#0F251C" }}>
+                      <span style={{ color: overProb >= underProb ? "#FFB627" : "#C9D6CD" }}>Over {line.toFixed(1)}</span>
+                      <span className="font-bold tabular-nums" style={{ color: overProb >= underProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overProb * 100).toFixed(1)}%</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: underProb > overProb ? "#1A362A" : "#0F251C" }}>
+                      <span style={{ color: underProb > overProb ? "#FFB627" : "#C9D6CD" }}>Under {line.toFixed(1)}</span>
+                      <span className="font-bold tabular-nums" style={{ color: underProb > overProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(underProb * 100).toFixed(1)}%</span>
+                    </div>
+                  </div>
+                  <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
+                    Carreras totales esperadas: {expectedRuns.toFixed(1)} — combina el promedio histórico de MLB (~{BASELINE_TOTAL_RUNS}), el park factor de {stadium.park}, y el ERA de ambos abridores{bothErasConfirmed ? "" : " (uno o ambos sin ERA confirmado hoy, se usó el promedio de liga como neutral)"}, pasado por una distribución de Poisson. Es un modelo estadístico real, no una garantía — no incluye lineup del día, bullpen, ni clima específico.
+                  </p>
                 </div>
               </div>
             );
