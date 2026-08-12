@@ -997,6 +997,7 @@ export default function DiamondStats() {
             avg: h.avg, hr: h.hr, rbi: h.rbi, obp: h.obp, slg: h.slg, ops: h.ops,
             k_pct: null, trend: "flat",
             ab: h.ab, h: h.h, doubles: h.doubles, triples: h.triples, g: h.g,
+            vsL: h.vsL, vsR: h.vsR, // splits reales — sin esto el modelo caía siempre al ajuste genérico
           }));
         setLiveHitters((prev) => ({ ...prev, [team]: mapped }));
         setHittersStatus("listo");
