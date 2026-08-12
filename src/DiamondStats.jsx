@@ -591,18 +591,42 @@ function ProbabilityRow({ code, rec, prob, isFavored, tag }) {
 }
 
 function DailyPicks() {
-  // Top 3 bateadores por probabilidad real de hit EN EL JUEGO (temporada
-  // completa, sin rival específico — para eso está el selector "Rival de
-  // hoy" en la pestaña Jugadores).
-  const topHitters = [...PLAYERS]
+  const [liveAllHitters, setLiveAllHitters] = useState(null); // null = aún cargando
+  const [loadStatus, setLoadStatus] = useState("cargando"); // "cargando" | "listo" | "error"
+
+  // Trae bateadores reales de los 30 equipos (en paralelo) para calcular el
+  // top del día con datos genuinamente en vivo, no una lista fija curada.
+  // El backend cachea cada equipo 15 minutos, así que esto no golpea la
+  // MLB Stats API de más en visitas seguidas.
+  useEffect(() => {
+    let cancelled = false;
+    const codes = Object.keys(TEAM_IDS);
+    Promise.all(
+      codes.map((code) =>
+        fetch(`${BACKEND_URL}/api/team/${code}/hitters`)
+          .then((r) => r.json())
+          .then((data) => (data.hitters || []).map((h) => ({ ...h, team: code })))
+          .catch(() => [])
+      )
+    )
+      .then((results) => {
+        if (cancelled) return;
+        const all = results.flat().filter((h) => h.ab > 0 && h.g > 0);
+        setLiveAllHitters(all);
+        setLoadStatus("listo");
+      })
+      .catch(() => { if (!cancelled) setLoadStatus("error"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const topHitters = (liveAllHitters || [])
     .map((p) => ({ player: p, prob: toGameProbability(hitProbabilities(p).hit, p.ab / p.g) }))
     .sort((a, b) => b.prob - a.prob)
     .slice(0, 3);
 
   // Top 3 equipos por probabilidad de ganar, usando Log5 contra un rival
   // promedio de liga (.500) — es decir, su nivel general de temporada, NO
-  // el rival específico de hoy (no tenemos el calendario completo de los
-  // 30 equipos para hoy, solo confirmamos HOU @ SF como partido real).
+  // el rival específico de hoy.
   const topTeams = Object.keys(TEAM_RECORDS)
     .map((code) => ({ code, rec: TEAM_RECORDS[code], prob: log5(TEAM_RECORDS[code].wpct, 0.5) }))
     .sort((a, b) => b.prob - a.prob)
@@ -617,24 +641,32 @@ function DailyPicks() {
         <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
           Mayor probabilidad de hit hoy
         </h2>
-        <div className="space-y-3">
-          {topHitters.map(({ player, prob }, i) => (
-            <div key={player.id} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
-              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
-                {i + 1}
+        {loadStatus === "cargando" && (
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando bateadores reales de los 30 equipos…</p>
+        )}
+        {loadStatus === "error" && (
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend en vivo ahora mismo.</p>
+        )}
+        {loadStatus === "listo" && (
+          <div className="space-y-3">
+            {topHitters.map(({ player, prob }, i) => (
+              <div key={player.name + player.team} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
+                <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                  {i + 1}
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{player.name}</div>
+                  <div className="text-[11px]" style={{ color: "#8FA599" }}>{player.team} · {player.pos} · {player.avg.toFixed(3)} AVG</div>
+                </div>
+                <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                  {prob.toFixed(1)}%
+                </div>
               </div>
-              <div className="flex-1">
-                <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{player.name}</div>
-                <div className="text-[11px]" style={{ color: "#8FA599" }}>{player.team} · {player.pos} · {player.avg.toFixed(3)} AVG</div>
-              </div>
-              <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
-                {prob.toFixed(1)}%
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
         <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
-          Probabilidad de conseguir al menos un hit en el juego, calculada con sus turnos al bate promedio reales de la temporada — no ajustada por el pitcher rival de hoy.
+          Probabilidad de conseguir al menos un hit en el juego, calculada con datos reales y en vivo de los 30 equipos — no ajustada por el pitcher rival de hoy.
         </p>
       </div>
 
@@ -662,12 +694,13 @@ function DailyPicks() {
           ))}
         </div>
         <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
-          Probabilidad Log5 contra un rival promedio de liga (.500) — refleja su nivel general de temporada, no un cruce específico de hoy. Para el único partido real confirmado hoy (Houston @ San Francisco), usa la pestaña Predictor.
+          Probabilidad Log5 contra un rival promedio de liga (.500), con récords en vivo — refleja su nivel general de temporada, no un cruce específico de hoy.
         </p>
       </div>
     </div>
   );
 }
+
 
 function TodayGamesHeader() {
   const [games, setGames] = useState([]);
