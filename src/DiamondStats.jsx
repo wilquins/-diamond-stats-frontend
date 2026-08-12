@@ -443,12 +443,34 @@ function Predictor({ probablesStatus }) {
   const [temp, setTemp] = useState("templado");
   const [daynight, setDaynight] = useState("noche");
   const [weekday, setWeekday] = useState("Lunes");
+  const [weather, setWeather] = useState(null);
+  const [weatherStatus, setWeatherStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
 
   const isRealMatchup = home === REAL_MATCHUP.home && away === REAL_MATCHUP.away;
+  const stadium = STADIUMS[home];
+
+  // Trae el clima real del estadio local cada vez que cambia el equipo de
+  // casa. Si el estadio tiene techo cerrado, ni se molesta en pedirlo — el
+  // clima no afecta el juego ahí de todas formas.
+  useEffect(() => {
+    if (stadium.roofed) { setWeather(null); setWeatherStatus("idle"); return; }
+    let cancelled = false;
+    setWeatherStatus("cargando");
+    fetch(`${BACKEND_URL}/api/weather/${home}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled || data.error) { setWeatherStatus("error"); return; }
+        setWeather(data);
+        setWeatherStatus("listo");
+        // Temperatura real → categoría automática para el modelo
+        setTemp(data.tempF < 60 ? "frio" : data.tempF > 80 ? "calor" : "templado");
+      })
+      .catch(() => { if (!cancelled) setWeatherStatus("error"); });
+    return () => { cancelled = true; };
+  }, [home, stadium.roofed]);
 
   const recHome = TEAM_RECORDS[home];
   const recAway = TEAM_RECORDS[away];
-  const stadium = STADIUMS[home];
 
   const baseProb = log5(recHome.wpct, recAway.wpct);
   const {
@@ -516,17 +538,43 @@ function Predictor({ probablesStatus }) {
           {stadium.park} — park factor base {stadium.runFactor.toFixed(2)} {stadium.roofed ? "(techo cerrado)" : ""}
         </div>
 
-        {!stadium.roofed && (
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <SegmentedControl label="Viento" value={wind} onChange={setWind} options={[["in", "Entra"], ["neutro", "Neutro"], ["out", "Sale"]]} />
-            <SegmentedControl label="Temperatura" value={temp} onChange={setTemp} options={[["frio", "Frío"], ["templado", "Templado"], ["calor", "Calor"]]} />
-          </div>
-        )}
         {stadium.roofed && (
           <p className="text-[11px]" style={{ color: "#5A7368" }}>Estadio con techo cerrado — el clima no afecta el juego.</p>
         )}
 
-        <div className="grid grid-cols-2 gap-3 mt-3 pt-3" style={{ borderTop: "1px dashed #2A4D3B" }}>
+        {!stadium.roofed && weatherStatus === "cargando" && (
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando clima real del estadio…</p>
+        )}
+        {!stadium.roofed && weatherStatus === "error" && (
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo traer el clima real — usando temperatura templada como neutral.</p>
+        )}
+        {!stadium.roofed && weatherStatus === "listo" && weather && (
+          <div className="mb-3">
+            <div className="flex items-center gap-3 mb-2">
+              <span style={{ fontSize: "28px" }}>{weather.icon}</span>
+              <div>
+                <div className="text-lg font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{weather.tempF.toFixed(1)}°F</div>
+                <div className="text-[10px]" style={{ color: "#8FA599" }}>{weather.description}</div>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-[10px]" style={{ color: "#8FA599" }}>
+              <div>Humedad: <b style={{ color: "#C9D6CD" }}>{weather.humidity}%</b></div>
+              <div>Viento: <b style={{ color: "#C9D6CD" }}>{weather.windMph.toFixed(1)} mph {weather.windDir}</b></div>
+              <div>P.O.P: <b style={{ color: "#C9D6CD" }}>{weather.pop}%</b></div>
+            </div>
+          </div>
+        )}
+
+        {!stadium.roofed && (
+          <div className="pt-3" style={{ borderTop: "1px dashed #2A4D3B" }}>
+            <SegmentedControl label="¿Hacia dónde sopla respecto al jardín central? (tu criterio — la dirección real no nos dice esto sin la orientación exacta del estadio)" value={wind} onChange={setWind} options={[["in", "Entra"], ["neutro", "Neutro"], ["out", "Sale"]]} />
+            <p className="text-[9px] mt-1.5" style={{ color: "#5A7368" }}>Temperatura del modelo ({temp}) ya se toma automáticamente del clima real de arriba.</p>
+          </div>
+        )}
+      </div>
+
+      <div className="p-3.5 rounded-lg border mb-5" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+        <div className="grid grid-cols-2 gap-3" style={{ paddingTop: 0 }}>
           <SegmentedControl label="Día / Noche" value={daynight} onChange={setDaynight} options={[["dia", "Día"], ["noche", "Noche"]]} />
           <div>
             <div className="text-[10px] tracking-widest uppercase mb-1.5" style={{ color: "#8FA599" }}>Día de la semana</div>
