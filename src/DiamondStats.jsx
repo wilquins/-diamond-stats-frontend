@@ -631,8 +631,6 @@ function DailyPicks() {
                 {prob.toFixed(1)}%
               </div>
             </div>
-
-
           ))}
         </div>
         <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
@@ -992,10 +990,19 @@ export default function DiamondStats() {
           <div className="mt-3 h-px w-full" style={{ background: "repeating-linear-gradient(90deg, #C8393E 0 10px, transparent 10px 20px)" }} />
         </div>
 
-        <TodayGamesHeader />
-
         {/* Pestañas */}
-        <div className="flex gap-2 mb-6">
+        <div className="flex gap-2 mb-6 flex-wrap">
+          <button
+            onClick={() => setView("juegos")}
+            className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5"
+            style={{
+              background: view === "juegos" ? "#FFB627" : "#12281E",
+              color: view === "juegos" ? "#0B1F17" : "#8FA599",
+              border: "1px solid " + (view === "juegos" ? "#FFB627" : "#1F3D30"),
+            }}
+          >
+            Juegos de hoy
+          </button>
           <button
             onClick={() => setView("jugadores")}
             className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
@@ -1031,7 +1038,9 @@ export default function DiamondStats() {
           </button>
         </div>
 
-        {view === "predictor" ? (
+        {view === "juegos" ? (
+          <TodayGamesHeader />
+        ) : view === "predictor" ? (
           <Predictor probablesStatus={probablesStatus} />
         ) : view === "picks" ? (
           <DailyPicks />
@@ -1253,5 +1262,3 @@ function MiniStat({ label, value }) {
     </div>
   );
 }
-
-
