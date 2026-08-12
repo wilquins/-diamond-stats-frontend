@@ -669,6 +669,142 @@ function DailyPicks() {
   );
 }
 
+function TodayGamesHeader() {
+  const [games, setGames] = useState([]);
+  const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
+  const [selectedGamePk, setSelectedGamePk] = useState(null);
+  const [gameHitters, setGameHitters] = useState([]);
+  const [hittersLoadStatus, setHittersLoadStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${BACKEND_URL}/api/games/today`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        setGames(data.games || []);
+        setStatus("listo");
+      })
+      .catch(() => { if (!cancelled) setStatus("error"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const selectGame = (game) => {
+    if (selectedGamePk === game.gamePk) {
+      setSelectedGamePk(null);
+      setGameHitters([]);
+      return;
+    }
+    setSelectedGamePk(game.gamePk);
+    setGameHitters([]);
+    setHittersLoadStatus("cargando");
+
+    const pitcherFor = (p) => (p && p.name !== "Por confirmar" ? { hand: p.hand, era: p.era != null ? p.era : LEAGUE_AVG_ERA } : null);
+
+    Promise.all([
+      fetch(`${BACKEND_URL}/api/team/${game.homeCode}/hitters`).then((r) => r.json()),
+      fetch(`${BACKEND_URL}/api/team/${game.awayCode}/hitters`).then((r) => r.json()),
+    ])
+      .then(([homeData, awayData]) => {
+        const homeBatters = (homeData.hitters || [])
+          .filter((h) => h.ab > 0 && h.g > 0)
+          .map((h) => ({ ...h, team: game.homeCode, pitcher: pitcherFor(game.awayPitcher) }));
+        const awayBatters = (awayData.hitters || [])
+          .filter((h) => h.ab > 0 && h.g > 0)
+          .map((h) => ({ ...h, team: game.awayCode, pitcher: pitcherFor(game.homePitcher) }));
+        const combined = [...homeBatters, ...awayBatters].map((p) => {
+          const gp = gameProbabilities(p, p.pitcher);
+          return { name: p.name, team: p.team, pos: p.pos, hit: gp.hit, single: gp.single, double: gp.double, hr: gp.hr };
+        });
+        setGameHitters(combined);
+        setHittersLoadStatus("listo");
+      })
+      .catch(() => setHittersLoadStatus("error"));
+  };
+
+  const selectedGame = games.find((g) => g.gamePk === selectedGamePk);
+  const topBy = (key, n = 3) => [...gameHitters].sort((a, b) => b[key] - a[key]).slice(0, n);
+
+  if (status === "cargando") {
+    return <div className="mb-6 text-[11px]" style={{ color: "#8FA599" }}>Buscando juegos de hoy…</div>;
+  }
+  if (status === "error" || games.length === 0) return null; // no rompe la app si no hay juegos o falla
+
+  return (
+    <div className="mb-6">
+      <div className="text-[11px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Juegos de hoy</div>
+      <div className="flex gap-2.5 overflow-x-auto pb-2">
+        {games.map((g) => {
+          const isSelected = g.gamePk === selectedGamePk;
+          const time = g.time
+            ? new Date(g.time).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit" })
+            : "";
+          return (
+            <button
+              key={g.gamePk}
+              onClick={() => selectGame(g)}
+              className="shrink-0 px-3.5 py-2.5 rounded-lg border text-left transition-colors"
+              style={{ background: isSelected ? "#17332688" : "#12281E", borderColor: isSelected ? "#FFB627" : "#1F3D30", minWidth: "160px" }}
+            >
+              <div className="text-xs font-semibold" style={{ color: "#EDEAE1" }}>
+                {g.awayCode || g.away} @ {g.homeCode || g.home}
+              </div>
+              <div className="text-[10px] mt-0.5" style={{ color: "#8FA599" }}>{time} · {g.status}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedGame && (
+        <div className="mt-3 p-4 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+          <div className="text-sm font-bold mb-1" style={{ color: "#EDEAE1" }}>{selectedGame.away} @ {selectedGame.home}</div>
+          <div className="text-[11px] mb-3" style={{ color: "#8FA599" }}>
+            {selectedGame.venue} · Abridores: {selectedGame.awayPitcher.name} vs. {selectedGame.homePitcher.name}
+          </div>
+
+          {hittersLoadStatus === "cargando" && (
+            <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando probabilidades de los bateadores de ambos equipos…</p>
+          )}
+          {hittersLoadStatus === "error" && (
+            <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudieron traer los bateadores de este partido.</p>
+          )}
+          {hittersLoadStatus === "listo" && gameHitters.length > 0 && (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { key: "hit", label: "Hit", color: "#FFB627" },
+                  { key: "single", label: "Sencillo", color: "#8FA599" },
+                  { key: "double", label: "Doble", color: "#5A9BC8" },
+                  { key: "hr", label: "Jonrón", color: "#C8393E" },
+                ].map((cat) => (
+                  <div key={cat.key}>
+                    <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: cat.color }}>{cat.label}</div>
+                    <div className="space-y-1.5">
+                      {topBy(cat.key).map((p, i) => (
+                        <div key={p.name + cat.key} className="flex items-center justify-between text-[11px]">
+                          <span style={{ color: "#EDEAE1" }}>{i + 1}. {p.name} <span style={{ color: "#8FA599" }}>({p.team})</span></span>
+                          <span className="font-bold tabular-nums" style={{ color: cat.color, fontFamily: "ui-monospace, monospace" }}>
+                            {p[cat.key].toFixed(1)}%
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
+                Probabilidad de que ocurra al menos una vez en el juego, con datos reales de temporada y cruzada
+                con el abridor probable rival (mano + ERA cuando está confirmado). No es el split personal de cada
+                jugador contra ese pitcher específico, es un ajuste de liga general.
+              </p>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DiamondStats() {
   const [view, setView] = useState("jugadores");
   const [query, setQuery] = useState("");
@@ -853,6 +989,8 @@ export default function DiamondStats() {
           </div>
           <div className="mt-3 h-px w-full" style={{ background: "repeating-linear-gradient(90deg, #C8393E 0 10px, transparent 10px 20px)" }} />
         </div>
+
+        <TodayGamesHeader />
 
         {/* Pestañas */}
         <div className="flex gap-2 mb-6">
