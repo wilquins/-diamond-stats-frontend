@@ -87,22 +87,42 @@ function hitProbabilities(p) {
 // jugador, no su split personal real contra ESE pitcher específico.
 function matchupAdjustedProbs(p, pitcher) {
   const base = hitProbabilities(p);
-  if (!pitcher) return { ...base, favorable: null, pitcher: null };
-  // Si no tenemos su mano de bateo (ej. jugadores traídos en vivo del
-  // backend, que todavía no incluye ese dato), no aplicamos platoon —
-  // mejor sin ese ajuste que aplicarlo con un supuesto inventado.
+  if (!pitcher) return { ...base, favorable: null, pitcher: null, usedRealSplit: false };
+
   const knownHand = p.bats === "L" || p.bats === "R";
   const favorable = knownHand ? p.bats !== pitcher.hand : null;
-  const platoonHitMult = favorable === null ? 1 : favorable ? 1.05 : 0.95;
-  const platoonHrMult = favorable === null ? 1 : favorable ? 1.15 : 0.85;
-  const platoonDoubleMult = favorable === null ? 1 : favorable ? 1.08 : 0.92;
+
+  // Si tenemos el split REAL del jugador contra esa mano específica (con
+  // muestra suficiente, ya filtrado en el backend), lo usamos en vez del
+  // ajuste genérico de liga — esto es la diferencia real entre un jugador
+  // como Yordan Álvarez (parejo contra ambas manos) y uno con una brecha
+  // grande de verdad.
+  const realSplit = pitcher.hand === "L" ? p.vsL : pitcher.hand === "R" ? p.vsR : null;
+  const usedRealSplit = knownHand && realSplit != null && realSplit.ops != null && base.hit > 0;
+
+  let platoonHitMult, platoonHrMult, platoonDoubleMult;
+  if (usedRealSplit) {
+    // Compara su OPS real contra esa mano vs. su OPS real de toda la
+    // temporada — la proporción entre ambos es su ajuste de platoon
+    // GENUINO, específico de este jugador, no un supuesto de liga.
+    const ratio = p.ops > 0 ? realSplit.ops / p.ops : 1;
+    const clamped = Math.min(1.4, Math.max(0.65, ratio));
+    platoonHitMult = clamped;
+    platoonHrMult = Math.min(1.6, Math.max(0.5, 1 + (clamped - 1) * 1.8)); // el jonrón reacciona más fuerte al platoon que el hit simple
+    platoonDoubleMult = Math.min(1.5, Math.max(0.6, 1 + (clamped - 1) * 1.3));
+  } else {
+    platoonHitMult = favorable === null ? 1 : favorable ? 1.05 : 0.95;
+    platoonHrMult = favorable === null ? 1 : favorable ? 1.15 : 0.85;
+    platoonDoubleMult = favorable === null ? 1 : favorable ? 1.08 : 0.92;
+  }
+
   const qualityMult = Math.min(1.5, Math.max(0.6, 1 - (LEAGUE_AVG_ERA - pitcher.era) * 0.03));
   const hit = base.hit * platoonHitMult * qualityMult;
   const hr = base.hr * platoonHrMult * qualityMult;
   const double = base.double * platoonDoubleMult * qualityMult;
   const triple = base.triple; // sin evidencia suficiente de split para triples, se deja neutral
   const single = Math.max(0, hit - double - triple - hr);
-  return { hit, single, double, triple, hr, favorable, pitcher, qualityMult };
+  return { hit, single, double, triple, hr, favorable, pitcher, qualityMult, usedRealSplit };
 }
 
 // Convierte una probabilidad "por turno al bate" en probabilidad "en algún
@@ -1368,7 +1388,7 @@ function HitProbabilities({ player, pitcher }) {
               className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
               style={{ background: p.favorable ? "#1A362A" : "#3A1E20", color: p.favorable ? "#FFB627" : "#E38A8E" }}
             >
-              vs. {pitcher.name} ({pitcher.eraConfirmed ? `${pitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}) · {p.favorable ? "ventaja" : "desventaja"} de platoon
+              vs. {pitcher.name} ({pitcher.eraConfirmed ? `${pitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}) · {p.favorable ? "ventaja" : "desventaja"} de platoon {p.usedRealSplit ? "(split real)" : "(promedio liga)"}
             </div>
           )}
           <div className="flex rounded-lg border overflow-hidden" style={{ borderColor: "#1F3D30" }}>
@@ -1400,7 +1420,7 @@ function HitProbabilities({ player, pitcher }) {
           ? `Probabilidad de que ocurra al menos una vez en el juego, combinando su tasa real por turno con su promedio real de ${perGame.abPerGame.toFixed(1)} turnos al bate por juego esta temporada (${player.ab} AB en ${player.g} juegos).`
           : "Probabilidad de un turno al bate individual, directo de sus conteos reales de la temporada."}
         {pitcher
-          ? ` Cruzado con el abridor real de hoy: mano (platoon) + su ERA ${pitcher.eraConfirmed ? `actual de ${pitcher.era.toFixed(2)}` : "(sin confirmar esta sesión, se usa el promedio de liga como neutral)"} vs. el promedio de liga (~4.00) — no es su split personal contra este pitcher específico, es un ajuste de liga general.`
+          ? ` Cruzado con el abridor real de hoy: ${p.usedRealSplit ? "su split REAL contra esa mano esta temporada" : "el ajuste de platoon genérico de liga (no tiene muestra suficiente de su split real todavía)"} + su ERA ${pitcher.eraConfirmed ? `actual de ${pitcher.era.toFixed(2)}` : "(sin confirmar esta sesión, se usa el promedio de liga como neutral)"} vs. el promedio de liga (~4.00). ${p.usedRealSplit ? "No es contra este pitcher específico, es su split contra pitchers de esa mano en general." : ""}`
           : " Elige el rival de hoy arriba para cruzar estas estadísticas con su abridor real."}
       </p>
     </div>
