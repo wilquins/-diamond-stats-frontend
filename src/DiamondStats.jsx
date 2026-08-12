@@ -730,33 +730,20 @@ function TodayGamesHeader() {
   }
   if (status === "error" || games.length === 0) return null; // no rompe la app si no hay juegos o falla
 
-  return (
-    <div className="mb-6">
-      <div className="text-[11px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Juegos de hoy</div>
-      <div className="flex flex-col gap-2.5">
-        {games.map((g) => {
-          const isSelected = g.gamePk === selectedGamePk;
-          const time = g.time
-            ? new Date(g.time).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit" })
-            : "";
-          return (
-            <button
-              key={g.gamePk}
-              onClick={() => selectGame(g)}
-              className="w-full px-3.5 py-2.5 rounded-lg border text-left transition-colors flex items-center justify-between"
-              style={{ background: isSelected ? "#17332688" : "#12281E", borderColor: isSelected ? "#FFB627" : "#1F3D30" }}
-            >
-              <div className="text-xs font-semibold" style={{ color: "#EDEAE1" }}>
-                {g.awayCode || g.away} @ {g.homeCode || g.home}
-              </div>
-              <div className="text-[10px]" style={{ color: "#8FA599" }}>{time} · {g.status}</div>
-            </button>
-          );
-        })}
-      </div>
+  // Si hay un juego seleccionado, mostramos SOLO su detalle (con botón para
+  // volver), en vez de agregarlo al final de la lista de juegos.
+  if (selectedGame) {
+    return (
+      <div className="mb-6">
+        <button
+          onClick={() => { setSelectedGamePk(null); setGameHitters([]); }}
+          className="text-[11px] font-semibold mb-3 flex items-center gap-1"
+          style={{ color: "#FFB627" }}
+        >
+          ← Volver a juegos de hoy
+        </button>
 
-      {selectedGame && (
-        <div className="mt-3 p-4 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+        <div className="p-4 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
           <div className="text-sm font-bold mb-1" style={{ color: "#EDEAE1" }}>{selectedGame.away} @ {selectedGame.home}</div>
           <div className="text-[11px] mb-3" style={{ color: "#8FA599" }}>
             {selectedGame.venue} · Abridores: {selectedGame.awayPitcher.name} vs. {selectedGame.homePitcher.name}
@@ -800,10 +787,38 @@ function TodayGamesHeader() {
             </>
           )}
         </div>
-      )}
+      </div>
+    );
+  }
+
+  // Sin juego seleccionado: mostramos la lista completa.
+  return (
+    <div className="mb-6">
+      <div className="text-[11px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Juegos de hoy</div>
+      <div className="flex flex-col gap-2.5">
+        {games.map((g) => {
+          const time = g.time
+            ? new Date(g.time).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit" })
+            : "";
+          return (
+            <button
+              key={g.gamePk}
+              onClick={() => selectGame(g)}
+              className="w-full px-3.5 py-2.5 rounded-lg border text-left transition-colors flex items-center justify-between"
+              style={{ background: "#12281E", borderColor: "#1F3D30" }}
+            >
+              <div className="text-xs font-semibold" style={{ color: "#EDEAE1" }}>
+                {g.awayCode || g.away} @ {g.homeCode || g.home}
+              </div>
+              <div className="text-[10px]" style={{ color: "#8FA599" }}>{time} · {g.status}</div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
+
 
 export default function DiamondStats() {
   const [view, setView] = useState("jugadores");
