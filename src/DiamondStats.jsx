@@ -1099,10 +1099,12 @@ export default function DiamondStats() {
 
   const combinedPlayers = useMemo(() => {
     if (team === "Todos") return PLAYERS;
-    const curatedNames = new Set(PLAYERS.filter((p) => p.team === team).map((p) => p.name));
-    const extraHitters = (liveHitters[team] || []).filter((p) => !curatedNames.has(p.name));
-    const extraPitchers = (livePitchers[team] || []).filter((p) => !curatedNames.has(p.name));
-    return [...PLAYERS, ...extraHitters, ...extraPitchers];
+    // Si un jugador está curado a mano Y también llega en vivo del backend
+    // (como Ben Rice), preferimos la versión EN VIVO — tiene datos más
+    // completos (splits reales vs. zurdo/derecho) que la curada no tiene.
+    const liveNamesThisTeam = new Set([...(liveHitters[team] || []), ...(livePitchers[team] || [])].map((p) => p.name));
+    const curatedRest = PLAYERS.filter((p) => !(p.team === team && liveNamesThisTeam.has(p.name)));
+    return [...curatedRest, ...(liveHitters[team] || []), ...(livePitchers[team] || [])];
   }, [team, liveHitters, livePitchers]);
 
   const filtered = useMemo(() => {
