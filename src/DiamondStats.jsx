@@ -51,6 +51,7 @@ const PLAYERS = [
   { id: 29, name: "Chase DeLauter", team: "CLE", pos: "RF", type: "bateador", bats: "L", avg: .277, hr: 12, rbi: 56, obp: .354, slg: .433, ops: .787, k_pct: 16.4, trend: "up", ab: 379, h: 105, doubles: 21, triples: 1, g: 101 },
   { id: 30, name: "Bo Bichette", team: "NYM", pos: "3B", type: "bateador", bats: "R", avg: .263, hr: 11, rbi: 59, obp: .307, slg: .378, ops: .685, k_pct: 20.0, trend: "flat", ab: 471, h: 124, doubles: 19, triples: 1, g: 118 },
   { id: 31, name: "Julio Rodríguez", team: "SEA", pos: "CF", type: "bateador", bats: "R", avg: .260, hr: 18, rbi: 51, obp: .322, slg: .426, ops: .748, k_pct: 22.6, trend: "up", ab: 420, h: 109, doubles: 16, triples: 0, g: 108 },
+  { id: 32, name: "Nolan Schanuel", team: "LAA", pos: "1B", type: "bateador", bats: "L", avg: .274, hr: 7, rbi: 41, obp: .350, slg: .391, ops: .741, k_pct: null, trend: "flat", ab: 361, h: 99, doubles: 21, triples: 0, g: 96 },
 ];
 
 const TEAMS = ["Todos", ...Object.keys(TEAM_IDS).sort()];
@@ -233,7 +234,7 @@ let PITCHERS = {
   TOR: { name: "Dylan Cease", hand: "R", era: 2.28, eraConfirmed: true },
   CWS: { name: "Sean Burke", hand: "R", era: 3.08, eraConfirmed: true },
   CLE: { name: "Gavin Williams", hand: "R", era: 3.55, eraConfirmed: true },
-  DET: { name: "Casey Mize", hand: "R", era: 4.00, eraConfirmed: false },
+  DET: { name: "Drew Anderson", hand: "R", era: 4.01, eraConfirmed: true },
   KC: { name: "Michael Wacha", hand: "R", era: 4.00, eraConfirmed: false },
   MIN: { name: "Joe Ryan", hand: "R", era: 3.65, eraConfirmed: true },
   HOU: { name: "Hunter Brown", hand: "R", era: 3.57, eraConfirmed: true },
