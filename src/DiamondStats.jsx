@@ -614,7 +614,7 @@ function Predictor({ probablesStatus, teamDayNight }) {
   useEffect(() => {
     if (!isRealMatchup) return;
     if (situationalStatus !== "listo" || bullpenStatus !== "listo") return;
-    const gameDate = new Date().toISOString().slice(0, 10);
+    const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }); // fecha real de MLB (Este de EE.UU.), no UTC
     fetch(`${BACKEND_URL}/api/predictions/save`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
