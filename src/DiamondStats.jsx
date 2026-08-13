@@ -606,6 +606,22 @@ function Predictor({ probablesStatus, teamDayNight }) {
   const homeProb = Math.min(0.92, Math.max(0.08, baseHomeProb + situationalAdjustment + bullpenAdjustment));
   const awayProb = 1 - homeProb;
 
+  // Guarda automáticamente la predicción del partido real de hoy, una vez
+  // que todos los ajustes reales (situacional, bullpen) ya terminaron de
+  // cargar — así se guarda el número final, no uno a medio calcular. El
+  // backend evita duplicados solo, así que no pasa nada si esto se
+  // dispara más de una vez.
+  useEffect(() => {
+    if (!isRealMatchup) return;
+    if (situationalStatus !== "listo" || bullpenStatus !== "listo") return;
+    const gameDate = new Date().toISOString().slice(0, 10);
+    fetch(`${BACKEND_URL}/api/predictions/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_date: gameDate, home_code: home, away_code: away, home_win_prob: homeProb }),
+    }).catch(() => {}); // si falla, no pasa nada — simplemente no se guardó esta vez
+  }, [isRealMatchup, situationalStatus, bullpenStatus, home, away, homeProb]);
+
   return (
     <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
       <div className="flex items-center justify-between mb-1 flex-wrap gap-2">
@@ -1230,6 +1246,98 @@ function TodayGamesHeader() {
 }
 
 
+function AccuracyView() {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    fetch(`${BACKEND_URL}/api/predictions/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/predictions/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  return (
+    <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>
+        Backtesting real — Fase 2
+      </div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
+        ¿Qué tan certero es el modelo?
+      </h2>
+
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar predicciones de días anteriores"}
+      </button>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && data && data.totalChecked === 0 && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          Todavía no hay predicciones comparadas contra resultados reales. La app guarda una predicción real cada día que visitas el Predictor con el partido real de hoy — vuelve en unos días, cuando esos juegos ya hayan terminado, y presiona "Revisar predicciones de días anteriores".
+        </p>
+      )}
+
+      {status === "listo" && data && data.totalChecked > 0 && (
+        <>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                {(data.accuracy * 100).toFixed(1)}%
+              </div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Acertó al favorito</div>
+            </div>
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: data.brierScore < 0.25 ? "#3FC97A" : "#C8393E", fontFamily: "ui-monospace, monospace" }}>
+                {data.brierScore.toFixed(3)}
+              </div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Brier Score (0=perfecto, 0.25=azar)</div>
+            </div>
+          </div>
+          <div className="text-[11px] mb-2" style={{ color: "#8FA599" }}>Basado en {data.totalChecked} predicciones reales comparadas.</div>
+
+          <div className="text-[10px] tracking-widest uppercase mb-2 mt-4" style={{ color: "#8FA599" }}>Últimas comparaciones</div>
+          <div className="space-y-1.5">
+            {data.recent.map((r, i) => {
+              const predictedFavorite = r.homeWinProb >= 0.5 ? r.home : r.away;
+              const correct = predictedFavorite === r.actualWinner;
+              return (
+                <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                  <span style={{ color: "#C9D6CD" }}>{r.date} · {r.away} @ {r.home}</span>
+                  <span style={{ color: "#8FA599" }}>Dio {(r.homeWinProb * 100).toFixed(0)}% a {r.home}</span>
+                  <span style={{ color: correct ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>{correct ? "✓ acertó" : "✗ falló"} (ganó {r.actualWinner})</span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      <p className="text-[10px] mt-4 leading-relaxed" style={{ color: "#5A7368" }}>
+        "Acertó al favorito" es simple: ¿ganó quien el modelo daba como más probable? El Brier Score es la métrica real de calibración — mide qué tan cerca estuvo el % exacto del resultado real, no solo si acertó la dirección. Un modelo honesto no necesita acertar siempre, necesita estar bien calibrado.
+      </p>
+    </div>
+  );
+}
+
 export default function DiamondStats() {
   const [view, setView] = useState("jugadores");
   const [query, setQuery] = useState("");
@@ -1487,6 +1595,17 @@ export default function DiamondStats() {
           >
             <TrendingUp className="w-3.5 h-3.5" /> Picks del día
           </button>
+          <button
+            onClick={() => setView("precision")}
+            className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5"
+            style={{
+              background: view === "precision" ? "#FFB627" : "#12281E",
+              color: view === "precision" ? "#0B1F17" : "#8FA599",
+              border: "1px solid " + (view === "precision" ? "#FFB627" : "#1F3D30"),
+            }}
+          >
+            Precisión
+          </button>
         </div>
 
         {view === "juegos" ? (
@@ -1495,6 +1614,8 @@ export default function DiamondStats() {
           <Predictor probablesStatus={probablesStatus} teamDayNight={teamDayNight} />
         ) : view === "picks" ? (
           <DailyPicks />
+        ) : view === "precision" ? (
+          <AccuracyView />
         ) : (
         <>
         {/* Buscador y filtro */}
