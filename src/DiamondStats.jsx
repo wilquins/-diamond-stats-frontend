@@ -927,6 +927,27 @@ function ProbabilityRow({ code, rec, prob, isFavored, tag }) {
 function DailyPicks() {
   const [liveAllHitters, setLiveAllHitters] = useState(null); // null = aún cargando
   const [loadStatus, setLoadStatus] = useState("cargando"); // "cargando" | "listo" | "error"
+  const [teamsPlayingToday, setTeamsPlayingToday] = useState(null); // null = aún cargando; luego Set de códigos
+
+  // Trae los juegos reales de hoy, para saber QUÉ equipos juegan — Picks
+  // del día debe mostrar solo jugadores y equipos con partido hoy, no el
+  // mejor de toda la liga sin importar si juegan o no.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${BACKEND_URL}/api/games/today`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        const set = new Set();
+        for (const g of data.games || []) {
+          if (g.homeCode) set.add(g.homeCode);
+          if (g.awayCode) set.add(g.awayCode);
+        }
+        setTeamsPlayingToday(set);
+      })
+      .catch(() => { if (!cancelled) setTeamsPlayingToday(new Set()); });
+    return () => { cancelled = true; };
+  }, []);
 
   // Trae bateadores reales de los 30 equipos (en paralelo) para calcular el
   // top del día con datos genuinamente en vivo, no una lista fija curada.
@@ -953,15 +974,25 @@ function DailyPicks() {
     return () => { cancelled = true; };
   }, []);
 
-  const topHitters = (liveAllHitters || [])
+  // Solo bateadores de equipos con partido real hoy — si el dato de juegos
+  // de hoy aún no cargó, no filtramos (mejor mostrar algo que nada), pero
+  // en cuanto llega, se aplica el filtro real.
+  const eligibleHitters = (liveAllHitters || []).filter(
+    (p) => !teamsPlayingToday || teamsPlayingToday.size === 0 || teamsPlayingToday.has(p.team)
+  );
+
+  const topHitters = eligibleHitters
     .map((p) => ({ player: p, prob: toGameProbability(hitProbabilities(p).hit, p.ab / p.g) }))
     .sort((a, b) => b.prob - a.prob)
     .slice(0, 3);
 
   // Top 3 equipos por probabilidad de ganar, usando Log5 contra un rival
-  // promedio de liga (.500) — es decir, su nivel general de temporada, NO
-  // el rival específico de hoy.
-  const topTeams = Object.keys(TEAM_RECORDS)
+  // promedio de liga (.500) — su nivel general de temporada — pero SOLO
+  // entre los equipos que de verdad juegan hoy.
+  const eligibleTeamCodes = Object.keys(TEAM_RECORDS).filter(
+    (code) => !teamsPlayingToday || teamsPlayingToday.size === 0 || teamsPlayingToday.has(code)
+  );
+  const topTeams = eligibleTeamCodes
     .map((code) => ({ code, rec: TEAM_RECORDS[code], prob: log5(TEAM_RECORDS[code].wpct, 0.5) }))
     .sort((a, b) => b.prob - a.prob)
     .slice(0, 3);
@@ -1000,7 +1031,7 @@ function DailyPicks() {
           </div>
         )}
         <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
-          Probabilidad de conseguir al menos un hit en el juego, calculada con datos reales y en vivo de los 30 equipos — no ajustada por el pitcher rival de hoy.
+          Probabilidad de conseguir al menos un hit en el juego, calculada con datos reales — solo entre jugadores cuyo equipo tiene partido real hoy. No ajustada por el pitcher rival específico.
         </p>
       </div>
 
@@ -1028,7 +1059,7 @@ function DailyPicks() {
           ))}
         </div>
         <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
-          Probabilidad Log5 contra un rival promedio de liga (.500), con récords en vivo — refleja su nivel general de temporada, no un cruce específico de hoy.
+          Probabilidad Log5 contra un rival promedio de liga (.500) — solo entre equipos con partido real hoy. Refleja su nivel general de temporada, no el rival específico de hoy (para eso, usa Predictor).
         </p>
       </div>
     </div>
