@@ -85,15 +85,15 @@ function hitProbabilities(p) {
 //    la ofensiva rival; uno por encima la favorece.
 // IMPORTANTE: sigue siendo un ajuste de liga general aplicado a ESTE
 // jugador, no su split personal real contra ESE pitcher específico.
-function matchupAdjustedProbs(p, pitcher) {
+function matchupAdjustedProbs(p, pitcher, todaysDayNight) {
   const base = hitProbabilities(p);
 
   // Ajuste real de día/noche: compara su OPS real jugando de día (o de
-  // noche, según la hora actual) contra su OPS de toda la temporada. Esto
-  // aplica siempre, elijas o no un rival — es un factor independiente del
-  // pitcher.
-  const isDayNow = new Date().getHours() < 17; // antes de las 5pm se cuenta como "de día"
-  const dayNightSplit = isDayNow ? p.vsDay : p.vsNight;
+  // noche) contra su OPS de toda la temporada. Usa el dato REAL del
+  // partido de hoy de su equipo (si juegan hoy) — no la hora del reloj de
+  // quien esté mirando la app, que no tiene nada que ver con el horario
+  // real del juego.
+  const dayNightSplit = todaysDayNight === "day" ? p.vsDay : todaysDayNight === "night" ? p.vsNight : null;
   const usedDayNightSplit = dayNightSplit != null && dayNightSplit.ops != null && p.ops > 0;
   const dayNightMult = usedDayNightSplit
     ? Math.min(1.3, Math.max(0.75, dayNightSplit.ops / p.ops))
@@ -154,8 +154,8 @@ function toGameProbability(perAbPct, abPerGame) {
   return (1 - Math.pow(1 - p, abPerGame)) * 100;
 }
 
-function gameProbabilities(p, pitcher) {
-  const perAb = matchupAdjustedProbs(p, pitcher);
+function gameProbabilities(p, pitcher, todaysDayNight) {
+  const perAb = matchupAdjustedProbs(p, pitcher, todaysDayNight);
   const abPerGame = p.ab / p.g;
   return {
     hit: toGameProbability(perAb.hit, abPerGame),
@@ -166,7 +166,7 @@ function gameProbabilities(p, pitcher) {
     favorable: perAb.favorable,
     pitcher: perAb.pitcher,
     usedRealSplit: perAb.usedRealSplit,
-    usedDayNightSplit: perAb.usedDayNightSplit, // mismo descuido de antes — faltaba copiarlo aquí también
+    usedDayNightSplit: perAb.usedDayNightSplit,
   };
 }
 
@@ -468,7 +468,7 @@ function PlayerCard({ player, onClick, active }) {
   );
 }
 
-function Predictor({ probablesStatus }) {
+function Predictor({ probablesStatus, teamDayNight }) {
   const teamCodes = Object.keys(TEAM_RECORDS);
   const [home, setHome] = useState(REAL_MATCHUP.home);
   const [away, setAway] = useState(REAL_MATCHUP.away);
@@ -482,13 +482,15 @@ function Predictor({ probablesStatus }) {
   const isRealMatchup = home === REAL_MATCHUP.home && away === REAL_MATCHUP.away;
   const stadium = STADIUMS[home];
 
-  // Hoy real — de esto se deriva si el ajuste usa el récord de día/noche y
-  // el récord de ese día de la semana, sin que el usuario tenga que elegir
-  // nada a mano.
+  // Hoy real — de esto se deriva el día de la semana para el récord
+  // situacional. El día/noche de CADA equipo se toma de su partido real de
+  // hoy (si juega), no de una hora de reloj compartida — un equipo puede
+  // jugar de día mientras otro juega de noche, el mismo día.
   const weekdayNamesEs = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
   const today = new Date();
   const todayWeekday = weekdayNamesEs[today.getDay()];
-  const isDayGameNow = today.getHours() < 17; // heurística simple: antes de las 5pm se cuenta como "de día"
+  const homeDayNight = teamDayNight?.[home] || null; // "day" | "night" | null si no juega hoy
+  const awayDayNight = teamDayNight?.[away] || null;
 
   // Trae el clima real del estadio local cada vez que cambia el equipo de
   // casa. Si el estadio tiene techo cerrado, ni se molesta en pedirlo — el
@@ -552,21 +554,21 @@ function Predictor({ probablesStatus }) {
   } = adjustedHomeProb({ baseProb, stadium, wind, temp, home, away });
 
   // Ajuste situacional real: compara el % de victorias de cada equipo en
-  // esta situación específica (día/noche + día de la semana) contra su %
-  // de victorias general — la diferencia es la señal real, con un peso
-  // conservador para no sobre-reaccionar.
-  const situationalDelta = (code, sign) => {
+  // esta situación específica (su propio día/noche real de hoy + día de
+  // la semana) contra su % de victorias general — la diferencia es la
+  // señal real, con un peso conservador para no sobre-reaccionar.
+  const situationalDelta = (code, dayNight, sign) => {
     const s = situational[code];
     if (!s) return 0;
     const overall = TEAM_RECORDS[code].wpct;
-    const dnPct = situationalWinPct(isDayGameNow ? s.dayRecord : s.nightRecord);
+    const dnPct = dayNight === "day" ? situationalWinPct(s.dayRecord) : dayNight === "night" ? situationalWinPct(s.nightRecord) : null;
     const wdPct = situationalWinPct(s.byWeekday?.[todayWeekday]);
     let delta = 0;
     if (dnPct != null) delta += (dnPct - overall) * 0.3;
     if (wdPct != null) delta += (wdPct - overall) * 0.3;
     return delta * sign;
   };
-  const situationalAdjustment = situationalDelta(home, 1) - situationalDelta(away, 1);
+  const situationalAdjustment = situationalDelta(home, homeDayNight, 1) - situationalDelta(away, awayDayNight, 1);
 
   const homeProb = Math.min(0.92, Math.max(0.08, baseHomeProb + situationalAdjustment));
   const awayProb = 1 - homeProb;
@@ -669,21 +671,21 @@ function Predictor({ probablesStatus }) {
 
       <div className="p-3.5 rounded-lg border mb-5" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
         <div className="text-[11px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-          Récord real hoy ({isDayGameNow ? "de día" : "de noche"} · {todayWeekday})
+          Récord real hoy · {todayWeekday}
         </div>
         {situationalStatus === "cargando" && (
           <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando récords reales de la temporada…</p>
         )}
         {situationalStatus === "listo" && (
           <div className="grid grid-cols-2 gap-3">
-            {[{ code: away, tag: "Visitante" }, { code: home, tag: "Local" }].map(({ code, tag }) => {
+            {[{ code: away, tag: "Visitante", dayNight: awayDayNight }, { code: home, tag: "Local", dayNight: homeDayNight }].map(({ code, tag, dayNight }) => {
               const s = situational[code];
-              const dn = s ? (isDayGameNow ? s.dayRecord : s.nightRecord) : null;
+              const dn = s && dayNight ? (dayNight === "day" ? s.dayRecord : s.nightRecord) : null;
               const wd = s?.byWeekday?.[todayWeekday];
               return (
                 <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
                   <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
-                  <div>{isDayGameNow ? "De día" : "De noche"}: <b style={{ color: "#C9D6CD" }}>{dn ? `${dn.w}-${dn.l}` : "—"}</b></div>
+                  <div>{dayNight ? (dayNight === "day" ? "De día (hoy)" : "De noche (hoy)") : "No juega hoy"}: <b style={{ color: "#C9D6CD" }}>{dn ? `${dn.w}-${dn.l}` : "—"}</b></div>
                   <div>{todayWeekday}: <b style={{ color: "#C9D6CD" }}>{wd ? `${wd.w}-${wd.l}` : "—"}</b></div>
                 </div>
               );
@@ -1002,7 +1004,7 @@ function TodayGamesHeader() {
           .filter((h) => h.ab > 0 && h.g > 0)
           .map((h) => ({ ...h, team: game.awayCode, pitcher: pitcherFor(game.homePitcher) }));
         const combined = [...homeBatters, ...awayBatters].map((p) => {
-          const gp = gameProbabilities(p, p.pitcher);
+          const gp = gameProbabilities(p, p.pitcher, game.dayNight);
           return { name: p.name, team: p.team, pos: p.pos, hit: gp.hit, single: gp.single, double: gp.double, hr: gp.hr };
         });
         setGameHitters(combined);
@@ -1175,6 +1177,27 @@ export default function DiamondStats() {
   const [selectedId, setSelectedId] = useState(PLAYERS[0].id);
   const [oppTeam, setOppTeam] = useState(null);
   const [playerDetailOpen, setPlayerDetailOpen] = useState(false);
+  const [teamDayNight, setTeamDayNight] = useState({}); // { [teamCode]: "day" | "night" } — solo equipos que juegan hoy
+
+  // Trae el día/noche REAL de los partidos de hoy, para poder cruzar cada
+  // jugador con el horario real de su propio equipo (no con la hora del
+  // reloj de quien esté usando la app).
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${BACKEND_URL}/api/games/today`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled || !data.games) return;
+        const map = {};
+        for (const g of data.games) {
+          if (g.homeCode && g.dayNight) map[g.homeCode] = g.dayNight;
+          if (g.awayCode && g.dayNight) map[g.awayCode] = g.dayNight;
+        }
+        setTeamDayNight(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [liveStatus, setLiveStatus] = useState("cargando"); // "cargando" | "en-vivo" | "respaldo"
   const [liveHitters, setLiveHitters] = useState({}); // { [teamCode]: player[] } — roster en vivo por equipo
   const [hittersStatus, setHittersStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
@@ -1409,7 +1432,7 @@ export default function DiamondStats() {
         {view === "juegos" ? (
           <TodayGamesHeader />
         ) : view === "predictor" ? (
-          <Predictor probablesStatus={probablesStatus} />
+          <Predictor probablesStatus={probablesStatus} teamDayNight={teamDayNight} />
         ) : view === "picks" ? (
           <DailyPicks />
         ) : (
@@ -1521,7 +1544,7 @@ export default function DiamondStats() {
                     <MiniStat label="RBI" value={selected.rbi} />
                     <MiniStat label="K %" value={selected.k_pct != null ? `${selected.k_pct}%` : "—"} />
                   </div>
-                  <HitProbabilities player={selected} pitcher={oppTeam ? PITCHERS[oppTeam] : null} />
+                  <HitProbabilities player={selected} pitcher={oppTeam ? PITCHERS[oppTeam] : null} todaysDayNight={teamDayNight[selected.team] || null} />
                 </>
               ) : (
                 <>
@@ -1574,10 +1597,10 @@ export default function DiamondStats() {
   );
 }
 
-function HitProbabilities({ player, pitcher }) {
+function HitProbabilities({ player, pitcher, todaysDayNight }) {
   const [mode, setMode] = useState("game");
-  const perAb = matchupAdjustedProbs(player, pitcher);
-  const perGame = gameProbabilities(player, pitcher);
+  const perAb = matchupAdjustedProbs(player, pitcher, todaysDayNight);
+  const perGame = gameProbabilities(player, pitcher, todaysDayNight);
   const p = mode === "game" ? perGame : perAb;
   const items = [
     { label: "Hit", value: p.hit, color: "#FFB627" },
@@ -1602,7 +1625,7 @@ function HitProbabilities({ player, pitcher }) {
           )}
           {p.usedDayNightSplit && (
             <div className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: "#1A362A", color: "#3FC97A" }}>
-              {new Date().getHours() < 17 ? "vs. de día" : "vs. de noche"} (split real)
+              {todaysDayNight === "day" ? "vs. juego de día de hoy" : "vs. juego de noche de hoy"} (split real)
             </div>
           )}
           <div className="flex rounded-lg border overflow-hidden" style={{ borderColor: "#1F3D30" }}>
