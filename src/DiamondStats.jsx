@@ -679,7 +679,7 @@ function WindFieldIcon({ deg, mph, orientationDeg }) {
         {/* Campo de béisbol — rotado a la orientación real si la tenemos */}
         <g transform={`rotate(${fieldRotation}, 70, 70)`}>
           <path
-            d="M70 22 L112 58 L98 118 L42 118 L28 58 Z"
+            d="M70 118 L112 82 L98 22 L42 22 L28 82 Z"
             fill="#0B3D33"
             stroke={hasRealOrientation ? "#3FC97A" : "#D97B3F"}
             strokeWidth="3.5"
