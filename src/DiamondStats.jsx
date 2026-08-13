@@ -239,6 +239,19 @@ const STADIUMS = {
   COL: { park: "Coors Field", runFactor: 1.20, roofed: false },
 };
 
+// Orientación REAL confirmada de home plate hacia el jardín central, solo
+// para los estadios donde encontramos el dato verificado (fuente: artículo
+// "Facing the Sun: Understanding MLB Stadium Orientations"). Es un valor
+// aproximado en grados (a partir de la dirección cardinal descrita, no un
+// azimut exacto medido). Los 27 equipos restantes no tienen este dato
+// confirmado — el ícono usa una orientación genérica para ellos, no lo
+// inventamos.
+const HOME_PLATE_ORIENTATION = {
+  BOS: 135, // Fenway Park — sureste
+  CHC: 270, // Wrigley Field — oeste
+  NYY: 45,  // Yankee Stadium — noreste (aprox.)
+};
+
 const HOME_ADVANTAGE = 0.024; // % histórico real de ventaja de jugar de local en MLB (~54% vs 50%)
 
 // ---- Abridores reales por equipo, temporada 2026 (fuente: MLB.com / reportes de rotación, al 10 ago 2026) ----
@@ -559,7 +572,7 @@ function Predictor({ probablesStatus }) {
                 </div>
               </div>
               <div className="flex flex-col items-center">
-                <WindFieldIcon deg={weather.windDirDeg} mph={weather.windMph} />
+                <WindFieldIcon deg={weather.windDirDeg} mph={weather.windMph} orientationDeg={HOME_PLATE_ORIENTATION[home]} />
                 <div className="text-[10px] font-semibold mt-0.5" style={{ color: "#FFB627" }}>{weather.windMph.toFixed(0)} mph · {weather.windDir}</div>
               </div>
             </div>
@@ -646,37 +659,50 @@ function PitcherCard({ team, pitcher, tag }) {
 // manda la API de clima. Los grados de "wind_direction" en meteorología
 // indican de DÓNDE viene el viento, así que la flecha se dibuja apuntando
 // hacia el lado opuesto (+180°), que es hacia donde empuja.
-function WindFieldIcon({ deg, mph, dirLabel }) {
+function WindFieldIcon({ deg, mph, orientationDeg }) {
   const towardDeg = (deg + 180) % 360;
+  const hasRealOrientation = orientationDeg != null;
+  // Si tenemos la orientación real, rotamos el campo entero para que su
+  // "home plate" apunte hacia donde realmente apunta en ese estadio —
+  // así la flecha del viento se puede leer en relación al jardín central
+  // de verdad, no a una orientación genérica inventada.
+  const fieldRotation = hasRealOrientation ? orientationDeg : 0;
   return (
-    <svg viewBox="0 0 140 140" width="100" height="100">
-      {/* Letras de puntos cardinales alrededor, para ubicar la flecha sin ambigüedad */}
-      <text x="70" y="14" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">N</text>
-      <text x="70" y="134" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">S</text>
-      <text x="10" y="74" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">O</text>
-      <text x="130" y="74" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">E</text>
+    <div className="flex flex-col items-center">
+      <svg viewBox="0 0 140 140" width="100" height="100">
+        {/* Letras de puntos cardinales alrededor, para ubicar la flecha sin ambigüedad */}
+        <text x="70" y="14" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">N</text>
+        <text x="70" y="134" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">S</text>
+        <text x="10" y="74" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">O</text>
+        <text x="130" y="74" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">E</text>
 
-      {/* Campo de béisbol, mismo estilo que el logo */}
-      <path
-        d="M70 22 L112 58 L98 118 L42 118 L28 58 Z"
-        fill="#0B3D33"
-        stroke="#D97B3F"
-        strokeWidth="3.5"
-      />
-      <path
-        d="M70 92 L48 70 L70 48 L92 70 Z"
-        fill="none"
-        stroke="#EDEAE1"
-        strokeWidth="1.5"
-        opacity="0.5"
-      />
+        {/* Campo de béisbol — rotado a la orientación real si la tenemos */}
+        <g transform={`rotate(${fieldRotation}, 70, 70)`}>
+          <path
+            d="M70 22 L112 58 L98 118 L42 118 L28 58 Z"
+            fill="#0B3D33"
+            stroke={hasRealOrientation ? "#3FC97A" : "#D97B3F"}
+            strokeWidth="3.5"
+          />
+          <path
+            d="M70 92 L48 70 L70 48 L92 70 Z"
+            fill="none"
+            stroke="#EDEAE1"
+            strokeWidth="1.5"
+            opacity="0.5"
+          />
+        </g>
 
-      {/* Flecha del viento — apunta hacia donde SOPLA (no de dónde viene) */}
-      <g transform={`translate(70,70) rotate(${towardDeg})`}>
-        <line x1="0" y1="22" x2="0" y2="-24" stroke="#FFB627" strokeWidth="5" strokeLinecap="round" />
-        <path d="M-10,-14 L0,-28 L10,-14 Z" fill="#FFB627" stroke="#0B3D33" strokeWidth="1" />
-      </g>
-    </svg>
+        {/* Flecha del viento — apunta hacia donde SOPLA (no de dónde viene) */}
+        <g transform={`translate(70,70) rotate(${towardDeg})`}>
+          <line x1="0" y1="22" x2="0" y2="-24" stroke="#FFB627" strokeWidth="5" strokeLinecap="round" />
+          <path d="M-10,-14 L0,-28 L10,-14 Z" fill="#FFB627" stroke="#0B3D33" strokeWidth="1" />
+        </g>
+      </svg>
+      <div className="text-[9px] font-semibold mt-0.5" style={{ color: hasRealOrientation ? "#3FC97A" : "#8FA599" }}>
+        {hasRealOrientation ? "Orientación real del estadio" : "Orientación genérica"}
+      </div>
+    </div>
   );
 }
 
