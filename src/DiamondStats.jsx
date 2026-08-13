@@ -586,13 +586,6 @@ function Predictor({ probablesStatus }) {
             </p>
           </div>
         )}
-
-        {!stadium.roofed && (
-          <div className="pt-3" style={{ borderTop: "1px dashed #2A4D3B" }}>
-            <SegmentedControl label="¿Hacia dónde sopla respecto al jardín central? (tu criterio — la dirección real no nos dice esto sin la orientación exacta del estadio)" value={wind} onChange={setWind} options={[["in", "Entra"], ["neutro", "Neutro"], ["out", "Sale"]]} />
-            <p className="text-[9px] mt-1.5" style={{ color: "#5A7368" }}>Temperatura del modelo ({temp}) ya se toma automáticamente del clima real de arriba.</p>
-          </div>
-        )}
       </div>
 
       <div className="p-3.5 rounded-lg border mb-5" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
