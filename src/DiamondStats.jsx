@@ -87,7 +87,26 @@ function hitProbabilities(p) {
 // jugador, no su split personal real contra ESE pitcher específico.
 function matchupAdjustedProbs(p, pitcher) {
   const base = hitProbabilities(p);
-  if (!pitcher) return { ...base, favorable: null, pitcher: null, usedRealSplit: false };
+
+  // Ajuste real de día/noche: compara su OPS real jugando de día (o de
+  // noche, según la hora actual) contra su OPS de toda la temporada. Esto
+  // aplica siempre, elijas o no un rival — es un factor independiente del
+  // pitcher.
+  const isDayNow = new Date().getHours() < 17; // antes de las 5pm se cuenta como "de día"
+  const dayNightSplit = isDayNow ? p.vsDay : p.vsNight;
+  const usedDayNightSplit = dayNightSplit != null && dayNightSplit.ops != null && p.ops > 0;
+  const dayNightMult = usedDayNightSplit
+    ? Math.min(1.3, Math.max(0.75, dayNightSplit.ops / p.ops))
+    : 1;
+
+  if (!pitcher) {
+    const hit = base.hit * dayNightMult;
+    const hr = base.hr * dayNightMult;
+    const double = base.double * dayNightMult;
+    const triple = base.triple;
+    const single = Math.max(0, hit - double - triple - hr);
+    return { hit, single, double, triple, hr, favorable: null, pitcher: null, usedRealSplit: false, usedDayNightSplit };
+  }
 
   const knownHand = p.bats === "L" || p.bats === "R";
   const favorable = knownHand ? p.bats !== pitcher.hand : null;
@@ -117,12 +136,12 @@ function matchupAdjustedProbs(p, pitcher) {
   }
 
   const qualityMult = Math.min(1.5, Math.max(0.6, 1 - (LEAGUE_AVG_ERA - pitcher.era) * 0.03));
-  const hit = base.hit * platoonHitMult * qualityMult;
-  const hr = base.hr * platoonHrMult * qualityMult;
-  const double = base.double * platoonDoubleMult * qualityMult;
+  const hit = base.hit * platoonHitMult * qualityMult * dayNightMult;
+  const hr = base.hr * platoonHrMult * qualityMult * dayNightMult;
+  const double = base.double * platoonDoubleMult * qualityMult * dayNightMult;
   const triple = base.triple; // sin evidencia suficiente de split para triples, se deja neutral
   const single = Math.max(0, hit - double - triple - hr);
-  return { hit, single, double, triple, hr, favorable, pitcher, qualityMult, usedRealSplit };
+  return { hit, single, double, triple, hr, favorable, pitcher, qualityMult, usedRealSplit, usedDayNightSplit };
 }
 
 // Convierte una probabilidad "por turno al bate" en probabilidad "en algún
@@ -1183,6 +1202,7 @@ export default function DiamondStats() {
             k_pct: null, trend: "flat",
             ab: h.ab, h: h.h, doubles: h.doubles, triples: h.triples, g: h.g,
             vsL: h.vsL, vsR: h.vsR, // splits reales — sin esto el modelo caía siempre al ajuste genérico
+            vsDay: h.vsDay, vsNight: h.vsNight, // splits reales de día/noche
           }));
         setLiveHitters((prev) => ({ ...prev, [team]: mapped }));
         setHittersStatus("listo");
@@ -1577,6 +1597,11 @@ function HitProbabilities({ player, pitcher }) {
               style={{ background: p.favorable ? "#1A362A" : "#3A1E20", color: p.favorable ? "#FFB627" : "#E38A8E" }}
             >
               vs. {pitcher.name} ({pitcher.eraConfirmed ? `${pitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}) · {p.favorable ? "ventaja" : "desventaja"} de platoon {p.usedRealSplit ? "(split real)" : "(promedio liga)"}
+            </div>
+          )}
+          {p.usedDayNightSplit && (
+            <div className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: "#1A362A", color: "#3FC97A" }}>
+              {new Date().getHours() < 17 ? "vs. de día" : "vs. de noche"} (split real)
             </div>
           )}
           <div className="flex rounded-lg border overflow-hidden" style={{ borderColor: "#1F3D30" }}>
