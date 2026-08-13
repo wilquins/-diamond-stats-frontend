@@ -928,10 +928,12 @@ function DailyPicks() {
   const [liveAllHitters, setLiveAllHitters] = useState(null); // null = aún cargando
   const [loadStatus, setLoadStatus] = useState("cargando"); // "cargando" | "listo" | "error"
   const [teamsPlayingToday, setTeamsPlayingToday] = useState(null); // null = aún cargando; luego Set de códigos
+  const [opponentOf, setOpponentOf] = useState({}); // { [teamCode]: rivalCode } — quién juega contra quién hoy
 
-  // Trae los juegos reales de hoy, para saber QUÉ equipos juegan — Picks
-  // del día debe mostrar solo jugadores y equipos con partido hoy, no el
-  // mejor de toda la liga sin importar si juegan o no.
+  // Trae los juegos reales de hoy, para saber QUÉ equipos juegan Y contra
+  // QUIÉN — Picks del día debe mostrar solo jugadores y equipos con
+  // partido hoy, y nunca mostrar a dos equipos que se enfrentan entre sí
+  // como si ambos "fueran a ganar" (eso es imposible en el mismo juego).
   useEffect(() => {
     let cancelled = false;
     fetch(`${BACKEND_URL}/api/games/today`)
@@ -939,11 +941,17 @@ function DailyPicks() {
       .then((data) => {
         if (cancelled) return;
         const set = new Set();
+        const opp = {};
         for (const g of data.games || []) {
           if (g.homeCode) set.add(g.homeCode);
           if (g.awayCode) set.add(g.awayCode);
+          if (g.homeCode && g.awayCode) {
+            opp[g.homeCode] = g.awayCode;
+            opp[g.awayCode] = g.homeCode;
+          }
         }
         setTeamsPlayingToday(set);
+        setOpponentOf(opp);
       })
       .catch(() => { if (!cancelled) setTeamsPlayingToday(new Set()); });
     return () => { cancelled = true; };
@@ -986,16 +994,34 @@ function DailyPicks() {
     .sort((a, b) => b.prob - a.prob)
     .slice(0, 3);
 
-  // Top 3 equipos por probabilidad de ganar, usando Log5 contra un rival
-  // promedio de liga (.500) — su nivel general de temporada — pero SOLO
-  // entre los equipos que de verdad juegan hoy.
+  // Top 3 equipos por probabilidad de ganar hoy — solo entre equipos con
+  // partido real. Si dos equipos del top se enfrentan ENTRE SÍ hoy, no
+  // pueden aparecer los dos como "van a ganar" (es el mismo juego) — se
+  // resuelve con Log5 real cabeza a cabeza, y solo se queda el que
+  // realmente favorece esa comparación directa.
   const eligibleTeamCodes = Object.keys(TEAM_RECORDS).filter(
     (code) => !teamsPlayingToday || teamsPlayingToday.size === 0 || teamsPlayingToday.has(code)
   );
-  const topTeams = eligibleTeamCodes
-    .map((code) => ({ code, rec: TEAM_RECORDS[code], prob: log5(TEAM_RECORDS[code].wpct, 0.5) }))
-    .sort((a, b) => b.prob - a.prob)
-    .slice(0, 3);
+  const seenMatchups = new Set();
+  const teamCandidates = [];
+  for (const code of eligibleTeamCodes) {
+    const rival = opponentOf[code];
+    if (rival && eligibleTeamCodes.includes(rival)) {
+      // Se enfrentan entre sí hoy — solo se evalúa esta pareja una vez.
+      const matchupKey = [code, rival].sort().join("-");
+      if (seenMatchups.has(matchupKey)) continue;
+      seenMatchups.add(matchupKey);
+      const headToHeadProb = log5(TEAM_RECORDS[code].wpct, TEAM_RECORDS[rival].wpct);
+      const winnerCode = headToHeadProb >= 0.5 ? code : rival;
+      const winnerProb = headToHeadProb >= 0.5 ? headToHeadProb : 1 - headToHeadProb;
+      teamCandidates.push({ code: winnerCode, rec: TEAM_RECORDS[winnerCode], prob: winnerProb });
+    } else {
+      // No se enfrenta a otro equipo de nuestra lista hoy — se usa su
+      // nivel general de temporada (Log5 vs. un rival promedio .500).
+      teamCandidates.push({ code, rec: TEAM_RECORDS[code], prob: log5(TEAM_RECORDS[code].wpct, 0.5) });
+    }
+  }
+  const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
 
   return (
     <div className="space-y-6">
