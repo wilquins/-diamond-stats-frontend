@@ -475,6 +475,8 @@ function Predictor({ probablesStatus, teamDayNight }) {
   const [wind, setWind] = useState("neutro");
   const [temp, setTemp] = useState("templado");
   const [weather, setWeather] = useState(null);
+  const [bullpen, setBullpen] = useState({}); // { [teamCode]: { bullpenERA, bullpenWHIP, ... } }
+  const [bullpenStatus, setBullpenStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
   const [weatherStatus, setWeatherStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
   const [situational, setSituational] = useState({}); // { [teamCode]: { dayRecord, nightRecord, byWeekday } }
   const [situationalStatus, setSituationalStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
@@ -511,6 +513,27 @@ function Predictor({ probablesStatus, teamDayNight }) {
       .catch(() => { if (!cancelled) setWeatherStatus("error"); });
     return () => { cancelled = true; };
   }, [home, stadium.roofed]);
+
+  // Trae la calidad REAL del bullpen (relevistas) de ambos equipos.
+  useEffect(() => {
+    let cancelled = false;
+    setBullpenStatus("cargando");
+    Promise.all(
+      [home, away].map((code) =>
+        fetch(`${BACKEND_URL}/api/team/${code}/bullpen`)
+          .then((r) => r.json())
+          .then((data) => ({ code, data }))
+          .catch(() => ({ code, data: null }))
+      )
+    ).then((results) => {
+      if (cancelled) return;
+      const next = {};
+      for (const { code, data } of results) if (data && !data.error) next[code] = data;
+      setBullpen((prev) => ({ ...prev, ...next }));
+      setBullpenStatus("listo");
+    });
+    return () => { cancelled = true; };
+  }, [home, away]);
 
   // Trae el récord REAL de día/noche y por día de la semana de ambos
   // equipos — calculado de su calendario real, no elegido a mano.
@@ -570,7 +593,17 @@ function Predictor({ probablesStatus, teamDayNight }) {
   };
   const situationalAdjustment = situationalDelta(home, homeDayNight, 1) - situationalDelta(away, awayDayNight, 1);
 
-  const homeProb = Math.min(0.92, Math.max(0.08, baseHomeProb + situationalAdjustment));
+  // Ajuste real de bullpen: mismo principio que el ERA del abridor, pero
+  // con menos peso (0.025 vs. 0.04) porque el abridor suele definir más
+  // del resultado de un solo juego — el bullpen es real pero secundario.
+  const homeBullpenERA = bullpen[home]?.bullpenERA;
+  const awayBullpenERA = bullpen[away]?.bullpenERA;
+  const bullpenAdjustment =
+    homeBullpenERA != null && awayBullpenERA != null
+      ? (LEAGUE_AVG_ERA - homeBullpenERA) * 0.025 - (LEAGUE_AVG_ERA - awayBullpenERA) * 0.025
+      : 0;
+
+  const homeProb = Math.min(0.92, Math.max(0.08, baseHomeProb + situationalAdjustment + bullpenAdjustment));
   const awayProb = 1 - homeProb;
 
   return (
@@ -667,6 +700,33 @@ function Predictor({ probablesStatus, teamDayNight }) {
             </p>
           </div>
         )}
+      </div>
+
+      <div className="p-3.5 rounded-lg border mb-5" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+        <div className="text-[11px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+          Calidad real del bullpen
+        </div>
+        {bullpenStatus === "cargando" && (
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando relevistas reales de ambos equipos…</p>
+        )}
+        {bullpenStatus === "listo" && (
+          <div className="grid grid-cols-2 gap-3">
+            {[{ code: away, tag: "Visitante" }, { code: home, tag: "Local" }].map(({ code, tag }) => {
+              const bp = bullpen[code];
+              return (
+                <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
+                  <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
+                  <div>ERA: <b style={{ color: bp?.bullpenERA != null ? (bp.bullpenERA < 3.5 ? "#FFB627" : bp.bullpenERA > 4.5 ? "#C8393E" : "#C9D6CD") : "#8FA599" }}>{bp?.bullpenERA ?? "—"}</b></div>
+                  <div>WHIP: <b style={{ color: "#C9D6CD" }}>{bp?.bullpenWHIP ?? "—"}</b></div>
+                  <div className="text-[9px]" style={{ color: "#5A7368" }}>{bp?.relieverCount ?? 0} relevistas · {bp?.totalIP ?? 0} IP</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
+          ERA y WHIP reales, ponderados por entradas lanzadas, de todos los relevistas activos de cada equipo — antes el modelo solo evaluaba al abridor.
+        </p>
       </div>
 
       <div className="p-3.5 rounded-lg border mb-5" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
