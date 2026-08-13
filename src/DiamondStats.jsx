@@ -165,7 +165,8 @@ function gameProbabilities(p, pitcher) {
     abPerGame,
     favorable: perAb.favorable,
     pitcher: perAb.pitcher,
-    usedRealSplit: perAb.usedRealSplit, // faltaba copiar esto — por eso la vista "Por juego" (la que carga por defecto) nunca mostraba "(split real)"
+    usedRealSplit: perAb.usedRealSplit,
+    usedDayNightSplit: perAb.usedDayNightSplit, // mismo descuido de antes — faltaba copiarlo aquí también
   };
 }
 
