@@ -454,13 +454,21 @@ function Predictor({ probablesStatus }) {
   const [away, setAway] = useState(REAL_MATCHUP.away);
   const [wind, setWind] = useState("neutro");
   const [temp, setTemp] = useState("templado");
-  const [daynight, setDaynight] = useState("noche");
-  const [weekday, setWeekday] = useState("Lunes");
   const [weather, setWeather] = useState(null);
   const [weatherStatus, setWeatherStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
+  const [situational, setSituational] = useState({}); // { [teamCode]: { dayRecord, nightRecord, byWeekday } }
+  const [situationalStatus, setSituationalStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
 
   const isRealMatchup = home === REAL_MATCHUP.home && away === REAL_MATCHUP.away;
   const stadium = STADIUMS[home];
+
+  // Hoy real — de esto se deriva si el ajuste usa el récord de día/noche y
+  // el récord de ese día de la semana, sin que el usuario tenga que elegir
+  // nada a mano.
+  const weekdayNamesEs = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+  const today = new Date();
+  const todayWeekday = weekdayNamesEs[today.getDay()];
+  const isDayGameNow = today.getHours() < 17; // heurística simple: antes de las 5pm se cuenta como "de día"
 
   // Trae el clima real del estadio local cada vez que cambia el equipo de
   // casa. Si el estadio tiene techo cerrado, ni se molesta en pedirlo — el
@@ -482,14 +490,65 @@ function Predictor({ probablesStatus }) {
     return () => { cancelled = true; };
   }, [home, stadium.roofed]);
 
+  // Trae el récord REAL de día/noche y por día de la semana de ambos
+  // equipos — calculado de su calendario real, no elegido a mano.
+  useEffect(() => {
+    let cancelled = false;
+    setSituationalStatus("cargando");
+    Promise.all(
+      [home, away].map((code) =>
+        fetch(`${BACKEND_URL}/api/team/${code}/situational`)
+          .then((r) => r.json())
+          .then((data) => ({ code, data }))
+          .catch(() => ({ code, data: null }))
+      )
+    ).then((results) => {
+      if (cancelled) return;
+      const next = {};
+      for (const { code, data } of results) if (data && !data.error) next[code] = data;
+      setSituational((prev) => ({ ...prev, ...next }));
+      setSituationalStatus("listo");
+    });
+    return () => { cancelled = true; };
+  }, [home, away]);
+
+  // Convierte un récord (w/l) en una probabilidad ajustada. Solo se aplica
+  // si hay al menos 5 juegos de muestra — con menos que eso, un récord
+  // real puede ser puro ruido, y preferimos no reaccionar de más.
+  const situationalWinPct = (record) => {
+    if (!record) return null;
+    const total = record.w + record.l;
+    if (total < 5) return null;
+    return record.w / total;
+  };
+
   const recHome = TEAM_RECORDS[home];
   const recAway = TEAM_RECORDS[away];
 
   const baseProb = log5(recHome.wpct, recAway.wpct);
   const {
-    prob: homeProb, effectiveRunFactor, homeBattersEdge, awayBattersEdge,
+    prob: baseHomeProb, effectiveRunFactor, homeBattersEdge, awayBattersEdge,
     homePitcher, awayPitcher, pitcherAdjustment,
   } = adjustedHomeProb({ baseProb, stadium, wind, temp, home, away });
+
+  // Ajuste situacional real: compara el % de victorias de cada equipo en
+  // esta situación específica (día/noche + día de la semana) contra su %
+  // de victorias general — la diferencia es la señal real, con un peso
+  // conservador para no sobre-reaccionar.
+  const situationalDelta = (code, sign) => {
+    const s = situational[code];
+    if (!s) return 0;
+    const overall = TEAM_RECORDS[code].wpct;
+    const dnPct = situationalWinPct(isDayGameNow ? s.dayRecord : s.nightRecord);
+    const wdPct = situationalWinPct(s.byWeekday?.[todayWeekday]);
+    let delta = 0;
+    if (dnPct != null) delta += (dnPct - overall) * 0.3;
+    if (wdPct != null) delta += (wdPct - overall) * 0.3;
+    return delta * sign;
+  };
+  const situationalAdjustment = situationalDelta(home, 1) - situationalDelta(away, 1);
+
+  const homeProb = Math.min(0.92, Math.max(0.08, baseHomeProb + situationalAdjustment));
   const awayProb = 1 - homeProb;
 
   return (
@@ -589,20 +648,30 @@ function Predictor({ probablesStatus }) {
       </div>
 
       <div className="p-3.5 rounded-lg border mb-5" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-        <div className="grid grid-cols-2 gap-3" style={{ paddingTop: 0 }}>
-          <SegmentedControl label="Día / Noche" value={daynight} onChange={setDaynight} options={[["dia", "Día"], ["noche", "Noche"]]} />
-          <div>
-            <div className="text-[10px] tracking-widest uppercase mb-1.5" style={{ color: "#8FA599" }}>Día de la semana</div>
-            <select value={weekday} onChange={(e) => setWeekday(e.target.value)} className="w-full px-2.5 py-2 rounded-lg border text-xs outline-none" style={{ background: "#0F251C", borderColor: "#1F3D30", color: "#EDEAE1" }}>
-              {["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"].map((d) => (
-                <option key={d} value={d} style={{ background: "#0F251C" }}>{d}</option>
-              ))}
-            </select>
-          </div>
+        <div className="text-[11px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+          Récord real hoy ({isDayGameNow ? "de día" : "de noche"} · {todayWeekday})
         </div>
+        {situationalStatus === "cargando" && (
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando récords reales de la temporada…</p>
+        )}
+        {situationalStatus === "listo" && (
+          <div className="grid grid-cols-2 gap-3">
+            {[{ code: away, tag: "Visitante" }, { code: home, tag: "Local" }].map(({ code, tag }) => {
+              const s = situational[code];
+              const dn = s ? (isDayGameNow ? s.dayRecord : s.nightRecord) : null;
+              const wd = s?.byWeekday?.[todayWeekday];
+              return (
+                <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
+                  <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
+                  <div>{isDayGameNow ? "De día" : "De noche"}: <b style={{ color: "#C9D6CD" }}>{dn ? `${dn.w}-${dn.l}` : "—"}</b></div>
+                  <div>{todayWeekday}: <b style={{ color: "#C9D6CD" }}>{wd ? `${wd.w}-${wd.l}` : "—"}</b></div>
+                </div>
+              );
+            })}
+          </div>
+        )}
         <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-          Día/noche y día de la semana se muestran como contexto, pero no ajustan la probabilidad: la evidencia
-          estadística de su efecto real en el resultado es demasiado débil para incluirla con honestidad.
+          Récords reales calculados del calendario de la temporada — solo ajustan el modelo si hay al menos 5 juegos de muestra en esa situación, para no reaccionar a rachas cortas.
         </p>
       </div>
 
