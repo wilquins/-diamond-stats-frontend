@@ -1112,6 +1112,8 @@ function TodayGamesHeader() {
   const [situationalStatus, setSituationalStatus] = useState("idle");
   const [hitStreaks, setHitStreaks] = useState({}); // { [playerId]: number de juegos consecutivos con hit }
   const [lineupAvailable, setLineupAvailable] = useState(false); // ¿ya se publicó la alineación real de hoy?
+  const [lineupData, setLineupDataState] = useState(null); // { home: [...], away: [...] } — la alineación real completa
+  const [showLineup, setShowLineup] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1161,6 +1163,7 @@ function TodayGamesHeader() {
           awayBatters = awayBatters.filter((p) => awayNames.has(p.name));
         }
         setLineupAvailable(lineupData.available === true);
+        setLineupDataState(lineupData.available ? lineupData : null);
 
         const combined = [...homeBatters, ...awayBatters].map((p) => {
           const gp = gameProbabilities(p, p.pitcher, game.dayNight);
@@ -1423,8 +1426,43 @@ function TodayGamesHeader() {
           </div>
 
           {hittersLoadStatus === "listo" && gameHitters.length > 0 && (
-            <div className="mb-2 text-[10px] font-semibold px-2 py-1 rounded-full inline-block" style={{ background: lineupAvailable ? "#1A362A" : "#12281E", color: lineupAvailable ? "#3FC97A" : "#8FA599" }}>
-              {lineupAvailable ? "✓ Alineación real de hoy confirmada" : "Alineación aún no publicada — usando roster activo completo"}
+            <div className="mb-2 flex items-center gap-2 flex-wrap">
+              <div className="text-[10px] font-semibold px-2 py-1 rounded-full inline-block" style={{ background: lineupAvailable ? "#1A362A" : "#12281E", color: lineupAvailable ? "#3FC97A" : "#8FA599" }}>
+                {lineupAvailable ? "✓ Alineación real de hoy confirmada" : "Alineación aún no publicada — usando roster activo completo"}
+              </div>
+              {lineupAvailable && lineupData && (
+                <button
+                  onClick={() => setShowLineup((v) => !v)}
+                  className="text-[10px] font-semibold px-2 py-1 rounded-full"
+                  style={{ background: "#12281E", color: "#FFB627", border: "1px solid #1F3D30" }}
+                >
+                  {showLineup ? "Ocultar alineación ▲" : "Ver alineación ▾"}
+                </button>
+              )}
+            </div>
+          )}
+          {showLineup && lineupData && (
+            <div className="mb-4 grid grid-cols-2 gap-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>{selectedGame.awayCode} · Visitante</div>
+                <ol className="space-y-1">
+                  {(lineupData.away || []).map((p, i) => (
+                    <li key={i} className="text-[11px] flex justify-between" style={{ color: "#C9D6CD" }}>
+                      <span>{i + 1}. {p.name}</span><span style={{ color: "#8FA599" }}>{p.pos}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+              <div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>{selectedGame.homeCode} · Local</div>
+                <ol className="space-y-1">
+                  {(lineupData.home || []).map((p, i) => (
+                    <li key={i} className="text-[11px] flex justify-between" style={{ color: "#C9D6CD" }}>
+                      <span>{i + 1}. {p.name}</span><span style={{ color: "#8FA599" }}>{p.pos}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
             </div>
           )}
           {hittersLoadStatus === "cargando" && (
