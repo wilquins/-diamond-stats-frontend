@@ -1464,7 +1464,7 @@ function TodayGamesHeader() {
       <div className="flex flex-col gap-2.5">
         {games.map((g) => {
           const time = g.time
-            ? new Date(g.time).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit" })
+            ? new Date(g.time).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit", hour12: true })
             : "";
           return (
             <button
