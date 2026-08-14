@@ -1044,7 +1044,7 @@ function AccuracyView() {
   );
 }
 
-export default function DiamondStats() {
+export default function DiamondStats({ onBackToMenu }) {
   const [view, setView] = useState("jugadores");
   const [query, setQuery] = useState("");
   const [team, setTeam] = useState("Todos");
@@ -1231,6 +1231,15 @@ export default function DiamondStats() {
             <span className="text-[11px] tracking-[0.25em] uppercase" style={{ color: "#8FA599", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
               MLB Player Analytics — Prototipo
             </span>
+            {onBackToMenu && (
+              <button
+                onClick={onBackToMenu}
+                className="ml-auto text-[10px] font-semibold px-2 py-1 rounded-full"
+                style={{ background: "#12281E", color: "#8FA599", border: "1px solid #1F3D30" }}
+              >
+                ← Elegir otro deporte
+              </button>
+            )}
           </div>
           <h1
             className="text-4xl sm:text-5xl font-black tracking-tight"
