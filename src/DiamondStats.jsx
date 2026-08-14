@@ -1402,9 +1402,9 @@ function TodayGamesHeader() {
                         <div key={p.name + cat.key} className="flex items-center justify-between text-[11px]">
                           <span style={{ color: "#EDEAE1" }}>
                             {i + 1}. {p.name} <span style={{ color: "#8FA599" }}>({p.team})</span>
-                            {cat.key === "hit" && hitStreaks[p.id] != null && (
+                            {cat.key === "hit" && hitStreaks[p.id] != null && hitStreaks[p.id] >= 2 && (
                               <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "#1A362A", color: "#3FC97A" }}>
-                                🔥 {hitStreaks[p.id]}
+                                {hitStreaks[p.id]}/{hitStreaks[p.id]}
                               </span>
                             )}
                           </span>
@@ -1420,7 +1420,7 @@ function TodayGamesHeader() {
               <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
                 Probabilidad de que ocurra al menos una vez en el juego, con datos reales de temporada y cruzada
                 con el abridor probable rival (mano + ERA cuando está confirmado). No es el split personal de cada
-                jugador contra ese pitcher específico, es un ajuste de liga general. El 🔥 junto al nombre en "Hit" es su racha REAL de juegos consecutivos con al menos un hit, calculada de su historial real de esta temporada.
+                jugador contra ese pitcher específico, es un ajuste de liga general. El "X/X" junto al nombre en "Hit" es su racha REAL de juegos consecutivos con al menos un hit (solo aparece si lleva 2 o más), calculada de su historial real de esta temporada.
               </p>
             </>
           )}
