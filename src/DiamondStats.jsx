@@ -851,6 +851,11 @@ function WindFieldIcon({ deg, mph, orientationDeg }) {
             strokeWidth="1.5"
             opacity="0.5"
           />
+          {/* Etiquetas de home plate y las bases, para que no haya duda de cuál es cuál */}
+          <text x="70" y="101" textAnchor="middle" fontSize="8" fontWeight="700" fill="#FFB627">P</text>
+          <text x="98" y="73" textAnchor="start" fontSize="8" fontWeight="700" fill="#FFB627">1</text>
+          <text x="70" y="41" textAnchor="middle" fontSize="8" fontWeight="700" fill="#FFB627">2</text>
+          <text x="42" y="73" textAnchor="end" fontSize="8" fontWeight="700" fill="#FFB627">3</text>
         </g>
 
         {/* Flecha del viento — apunta hacia donde SOPLA (no de dónde viene) */}
