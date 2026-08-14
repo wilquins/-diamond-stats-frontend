@@ -469,6 +469,59 @@ function PlayerCard({ player, onClick, active }) {
 }
 
 
+function WindFieldIcon({ deg, mph, orientationDeg }) {
+  const towardDeg = (deg + 180) % 360;
+  const hasRealOrientation = orientationDeg != null;
+  // Si tenemos la orientación real, rotamos el campo entero para que su
+  // "home plate" apunte hacia donde realmente apunta en ese estadio —
+  // así la flecha del viento se puede leer en relación al jardín central
+  // de verdad, no a una orientación genérica inventada.
+  const fieldRotation = hasRealOrientation ? orientationDeg : 0;
+  return (
+    <div className="flex flex-col items-center">
+      <svg viewBox="0 0 140 140" width="100" height="100">
+        {/* Letras de puntos cardinales alrededor, para ubicar la flecha sin ambigüedad */}
+        <text x="70" y="14" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">N</text>
+        <text x="70" y="134" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">S</text>
+        <text x="10" y="74" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">O</text>
+        <text x="130" y="74" textAnchor="middle" fontSize="13" fontWeight="700" fill="#8FA599">E</text>
+
+        {/* Campo de béisbol — rotado a la orientación real si la tenemos.
+            Home plate queda abajo (perspectiva de estar detrás del plato). */}
+        <g transform={`rotate(${fieldRotation}, 70, 70)`}>
+          <path
+            d="M70 118 L112 82 L98 22 L42 22 L28 82 Z"
+            fill="#0B3D33"
+            stroke={hasRealOrientation ? "#3FC97A" : "#D97B3F"}
+            strokeWidth="3.5"
+          />
+          <path
+            d="M70 92 L48 70 L70 48 L92 70 Z"
+            fill="none"
+            stroke="#EDEAE1"
+            strokeWidth="1.5"
+            opacity="0.5"
+          />
+          {/* Etiquetas de home plate y las bases, para que no haya duda de cuál es cuál */}
+          <text x="70" y="101" textAnchor="middle" fontSize="8" fontWeight="700" fill="#FFB627">P</text>
+          <text x="98" y="73" textAnchor="start" fontSize="8" fontWeight="700" fill="#FFB627">1</text>
+          <text x="70" y="41" textAnchor="middle" fontSize="8" fontWeight="700" fill="#FFB627">2</text>
+          <text x="42" y="73" textAnchor="end" fontSize="8" fontWeight="700" fill="#FFB627">3</text>
+        </g>
+
+        {/* Flecha del viento — apunta hacia donde SOPLA (no de dónde viene) */}
+        <g transform={`translate(70,70) rotate(${towardDeg})`}>
+          <line x1="0" y1="22" x2="0" y2="-24" stroke="#FFB627" strokeWidth="5" strokeLinecap="round" />
+          <path d="M-10,-14 L0,-28 L10,-14 Z" fill="#FFB627" stroke="#0B3D33" strokeWidth="1" />
+        </g>
+      </svg>
+      <div className="text-[9px] font-semibold mt-0.5" style={{ color: hasRealOrientation ? "#3FC97A" : "#8FA599" }}>
+        {hasRealOrientation ? "Orientación real del estadio" : "Orientación genérica"}
+      </div>
+    </div>
+  );
+}
+
 function TodayGamesHeader() {
   const [games, setGames] = useState([]);
   const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
