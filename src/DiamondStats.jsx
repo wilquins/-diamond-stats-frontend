@@ -1099,6 +1099,12 @@ function TodayGamesHeader() {
   const [selectedGamePk, setSelectedGamePk] = useState(null);
   const [gameHitters, setGameHitters] = useState([]);
   const [hittersLoadStatus, setHittersLoadStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
+  const [gameWeather, setGameWeather] = useState(null);
+  const [weatherStatus, setWeatherStatus] = useState("idle");
+  const [gameBullpen, setGameBullpen] = useState({}); // { [code]: {...} }
+  const [bullpenStatus, setBullpenStatus] = useState("idle");
+  const [gameSituational, setGameSituational] = useState({}); // { [code]: {...} }
+  const [situationalStatus, setSituationalStatus] = useState("idle");
 
   useEffect(() => {
     let cancelled = false;
@@ -1144,6 +1150,49 @@ function TodayGamesHeader() {
         setHittersLoadStatus("listo");
       })
       .catch(() => setHittersLoadStatus("error"));
+
+    // Clima real del estadio local (solo si no tiene techo cerrado).
+    const stadium = STADIUMS[game.homeCode];
+    if (stadium && !stadium.roofed) {
+      setWeatherStatus("cargando");
+      fetch(`${BACKEND_URL}/api/weather/${game.homeCode}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.error) { setWeatherStatus("error"); return; }
+          setGameWeather(data);
+          setWeatherStatus("listo");
+        })
+        .catch(() => setWeatherStatus("error"));
+    } else {
+      setGameWeather(null);
+      setWeatherStatus("idle");
+    }
+
+    // Calidad real de bullpen de ambos equipos.
+    setBullpenStatus("cargando");
+    Promise.all(
+      [game.homeCode, game.awayCode].map((code) =>
+        fetch(`${BACKEND_URL}/api/team/${code}/bullpen`).then((r) => r.json()).then((data) => ({ code, data })).catch(() => ({ code, data: null }))
+      )
+    ).then((results) => {
+      const next = {};
+      for (const { code, data } of results) if (data && !data.error) next[code] = data;
+      setGameBullpen(next);
+      setBullpenStatus("listo");
+    });
+
+    // Récord real situacional (día/noche + día de la semana) de ambos equipos.
+    setSituationalStatus("cargando");
+    Promise.all(
+      [game.homeCode, game.awayCode].map((code) =>
+        fetch(`${BACKEND_URL}/api/team/${code}/situational`).then((r) => r.json()).then((data) => ({ code, data })).catch(() => ({ code, data: null }))
+      )
+    ).then((results) => {
+      const next = {};
+      for (const { code, data } of results) if (data && !data.error) next[code] = data;
+      setGameSituational(next);
+      setSituationalStatus("listo");
+    });
   };
 
   const selectedGame = games.find((g) => g.gamePk === selectedGamePk);
@@ -1225,12 +1274,80 @@ function TodayGamesHeader() {
                     </div>
                   </div>
                   <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-                    Carreras totales esperadas: {expectedRuns.toFixed(1)} — combina el promedio real de MLB esta temporada ({BASELINE_TOTAL_RUNS}, calculado de los 30 equipos), el park factor de {stadium.park}, y el ERA de ambos abridores{bothErasConfirmed ? "" : " (uno o ambos sin ERA confirmado hoy, se usó el promedio de liga como neutral)"}, pasado por una distribución de Poisson. Es un modelo estadístico real, no una garantía — no incluye lineup del día, bullpen, ni clima específico.
+                    Carreras totales esperadas: {expectedRuns.toFixed(1)} — combina el promedio real de MLB esta temporada ({BASELINE_TOTAL_RUNS}, calculado de los 30 equipos), el park factor de {stadium.park}, y el ERA de ambos abridores{bothErasConfirmed ? "" : " (uno o ambos sin ERA confirmado hoy, se usó el promedio de liga como neutral)"}, pasado por una distribución de Poisson. Es un modelo estadístico real, no una garantía — no incluye lineup del día ni clima minuto a minuto.
                   </p>
                 </div>
               </div>
             );
           })()}
+
+          {/* Clima real del estadio */}
+          {weatherStatus !== "idle" && (
+            <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Clima real del estadio</div>
+              {weatherStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando clima real…</p>}
+              {weatherStatus === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo traer el clima real ahora mismo.</p>}
+              {weatherStatus === "listo" && gameWeather && (
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span style={{ fontSize: "24px" }}>{gameWeather.icon}</span>
+                  <div>
+                    <div className="text-base font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{gameWeather.tempF.toFixed(1)}°F</div>
+                    <div className="text-[10px]" style={{ color: "#8FA599" }}>{gameWeather.description}</div>
+                  </div>
+                  <div className="text-[11px]" style={{ color: "#8FA599" }}>
+                    Humedad: <b style={{ color: "#C9D6CD" }}>{gameWeather.humidity}%</b> · Viento: <b style={{ color: "#C9D6CD" }}>{gameWeather.windMph.toFixed(1)} mph {gameWeather.windDir}</b> · P.O.P: <b style={{ color: "#C9D6CD" }}>{gameWeather.pop}%</b>
+                  </div>
+                  <div className="ml-auto">
+                    <WindFieldIcon deg={gameWeather.windDirDeg} mph={gameWeather.windMph} orientationDeg={HOME_PLATE_ORIENTATION[selectedGame.homeCode]} />
+                  </div>
+                </div>
+              )}
+              {weatherStatus === "idle" && stadium.roofed && (
+                <p className="text-[11px]" style={{ color: "#5A7368" }}>Estadio con techo cerrado — el clima no afecta este juego.</p>
+              )}
+            </div>
+          )}
+
+          {/* Calidad real de bullpen */}
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Calidad real del bullpen</div>
+            {bullpenStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando relevistas reales…</p>}
+            {bullpenStatus === "listo" && (
+              <div className="grid grid-cols-2 gap-3">
+                {[{ code: selectedGame.awayCode, tag: "Visitante" }, { code: selectedGame.homeCode, tag: "Local" }].map(({ code, tag }) => {
+                  const bp = gameBullpen[code];
+                  return (
+                    <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
+                      <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
+                      <div>ERA: <b style={{ color: bp?.bullpenERA != null ? (bp.bullpenERA < 3.5 ? "#FFB627" : bp.bullpenERA > 4.5 ? "#C8393E" : "#C9D6CD") : "#8FA599" }}>{bp?.bullpenERA ?? "—"}</b> · WHIP: <b style={{ color: "#C9D6CD" }}>{bp?.bullpenWHIP ?? "—"}</b></div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Récord real situacional */}
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+              Récord real hoy ({selectedGame.dayNight === "day" ? "de día" : selectedGame.dayNight === "night" ? "de noche" : "—"})
+            </div>
+            {situationalStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando récords reales…</p>}
+            {situationalStatus === "listo" && (
+              <div className="grid grid-cols-2 gap-3">
+                {[{ code: selectedGame.awayCode, tag: "Visitante" }, { code: selectedGame.homeCode, tag: "Local" }].map(({ code, tag }) => {
+                  const s = gameSituational[code];
+                  const dn = s && selectedGame.dayNight ? (selectedGame.dayNight === "day" ? s.dayRecord : s.nightRecord) : null;
+                  return (
+                    <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
+                      <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
+                      <div>{selectedGame.dayNight === "day" ? "De día" : "De noche"}: <b style={{ color: "#C9D6CD" }}>{dn ? `${dn.w}-${dn.l}` : "—"}</b></div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           {hittersLoadStatus === "cargando" && (
             <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando probabilidades de los bateadores de ambos equipos…</p>
