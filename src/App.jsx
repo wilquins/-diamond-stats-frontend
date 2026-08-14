@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import DiamondStats from "./mlb/DiamondStats.jsx";
+import DiamondStats from "./MLB/DiamondStats.jsx";
 
 // ---- Ventana principal: selector de deporte ----
 // MLB ya está construido y funcionando (carpeta /mlb). Los otros 3 quedan
