@@ -1248,14 +1248,24 @@ function TodayGamesHeader() {
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
                 <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA)</div>
-                <div className="space-y-2 mb-3">
-                  <div className="flex items-center justify-between text-xs">
-                    <span style={{ color: awayWinProb >= homeWinProb ? "#FFB627" : "#C9D6CD" }}>{selectedGame.away}</span>
-                    <span className="font-bold tabular-nums" style={{ color: awayWinProb >= homeWinProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(awayWinProb * 100).toFixed(1)}%</span>
+                <div className="space-y-2.5 mb-3">
+                  <div>
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span style={{ color: awayWinProb >= homeWinProb ? "#FFB627" : "#C9D6CD" }}>{selectedGame.away}</span>
+                      <span className="font-bold tabular-nums" style={{ color: awayWinProb >= homeWinProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(awayWinProb * 100).toFixed(1)}%</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full" style={{ background: "#1A362A" }}>
+                      <div className="h-1.5 rounded-full transition-all duration-500" style={{ width: `${(awayWinProb * 100).toFixed(1)}%`, background: awayWinProb >= homeWinProb ? "#FFB627" : "#5A7368" }} />
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <span style={{ color: homeWinProb > awayWinProb ? "#FFB627" : "#C9D6CD" }}>{selectedGame.home}</span>
-                    <span className="font-bold tabular-nums" style={{ color: homeWinProb > awayWinProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(homeWinProb * 100).toFixed(1)}%</span>
+                  <div>
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span style={{ color: homeWinProb > awayWinProb ? "#FFB627" : "#C9D6CD" }}>{selectedGame.home}</span>
+                      <span className="font-bold tabular-nums" style={{ color: homeWinProb > awayWinProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(homeWinProb * 100).toFixed(1)}%</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full" style={{ background: "#1A362A" }}>
+                      <div className="h-1.5 rounded-full transition-all duration-500" style={{ width: `${(homeWinProb * 100).toFixed(1)}%`, background: homeWinProb > awayWinProb ? "#FFB627" : "#5A7368" }} />
+                    </div>
                   </div>
                 </div>
 
