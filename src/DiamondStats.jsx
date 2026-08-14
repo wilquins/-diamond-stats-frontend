@@ -1105,6 +1105,7 @@ function TodayGamesHeader() {
   const [bullpenStatus, setBullpenStatus] = useState("idle");
   const [gameSituational, setGameSituational] = useState({}); // { [code]: {...} }
   const [situationalStatus, setSituationalStatus] = useState("idle");
+  const [hitStreaks, setHitStreaks] = useState({}); // { [playerId]: number de juegos consecutivos con hit }
 
   useEffect(() => {
     let cancelled = false;
@@ -1144,7 +1145,7 @@ function TodayGamesHeader() {
           .map((h) => ({ ...h, team: game.awayCode, pitcher: pitcherFor(game.homePitcher) }));
         const combined = [...homeBatters, ...awayBatters].map((p) => {
           const gp = gameProbabilities(p, p.pitcher, game.dayNight);
-          return { name: p.name, team: p.team, pos: p.pos, hit: gp.hit, single: gp.single, double: gp.double, hr: gp.hr };
+          return { id: p.id, name: p.name, team: p.team, pos: p.pos, hit: gp.hit, single: gp.single, double: gp.double, hr: gp.hr };
         });
         setGameHitters(combined);
         setHittersLoadStatus("listo");
@@ -1197,6 +1198,23 @@ function TodayGamesHeader() {
 
   const selectedGame = games.find((g) => g.gamePk === selectedGamePk);
   const topBy = (key, n = 3) => [...gameHitters].sort((a, b) => b[key] - a[key]).slice(0, n);
+
+  // Trae la racha real de hit SOLO para el top 3 de la categoría "Hit" —
+  // no para los otros 9 jugadores que aparecen en el resto de columnas,
+  // para no multiplicar llamadas de más.
+  useEffect(() => {
+    if (gameHitters.length === 0) return;
+    const top3Hit = topBy("hit");
+    top3Hit.forEach((p) => {
+      if (!p.id || hitStreaks[p.id] !== undefined) return; // ya la tenemos, o no hay id
+      fetch(`${BACKEND_URL}/api/player/${p.id}/streak`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.streak != null) setHitStreaks((prev) => ({ ...prev, [p.id]: data.streak }));
+        })
+        .catch(() => {});
+    });
+  }, [gameHitters]);
 
   if (status === "cargando") {
     return <div className="mb-6 text-[11px]" style={{ color: "#8FA599" }}>Buscando juegos de hoy…</div>;
@@ -1382,7 +1400,14 @@ function TodayGamesHeader() {
                     <div className="space-y-1.5">
                       {topBy(cat.key).map((p, i) => (
                         <div key={p.name + cat.key} className="flex items-center justify-between text-[11px]">
-                          <span style={{ color: "#EDEAE1" }}>{i + 1}. {p.name} <span style={{ color: "#8FA599" }}>({p.team})</span></span>
+                          <span style={{ color: "#EDEAE1" }}>
+                            {i + 1}. {p.name} <span style={{ color: "#8FA599" }}>({p.team})</span>
+                            {cat.key === "hit" && hitStreaks[p.id] != null && (
+                              <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "#1A362A", color: "#3FC97A" }}>
+                                🔥 {hitStreaks[p.id]}
+                              </span>
+                            )}
+                          </span>
                           <span className="font-bold tabular-nums" style={{ color: cat.color, fontFamily: "ui-monospace, monospace" }}>
                             {p[cat.key].toFixed(1)}%
                           </span>
@@ -1395,7 +1420,7 @@ function TodayGamesHeader() {
               <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
                 Probabilidad de que ocurra al menos una vez en el juego, con datos reales de temporada y cruzada
                 con el abridor probable rival (mano + ERA cuando está confirmado). No es el split personal de cada
-                jugador contra ese pitcher específico, es un ajuste de liga general.
+                jugador contra ese pitcher específico, es un ajuste de liga general. El 🔥 junto al nombre en "Hit" es su racha REAL de juegos consecutivos con al menos un hit, calculada de su historial real de esta temporada.
               </p>
             </>
           )}
