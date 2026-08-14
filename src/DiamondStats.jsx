@@ -1111,6 +1111,7 @@ function TodayGamesHeader() {
   const [gameSituational, setGameSituational] = useState({}); // { [code]: {...} }
   const [situationalStatus, setSituationalStatus] = useState("idle");
   const [hitStreaks, setHitStreaks] = useState({}); // { [playerId]: number de juegos consecutivos con hit }
+  const [lineupAvailable, setLineupAvailable] = useState(false); // ¿ya se publicó la alineación real de hoy?
 
   useEffect(() => {
     let cancelled = false;
@@ -1140,14 +1141,27 @@ function TodayGamesHeader() {
     Promise.all([
       fetch(`${BACKEND_URL}/api/team/${game.homeCode}/hitters`).then((r) => r.json()),
       fetch(`${BACKEND_URL}/api/team/${game.awayCode}/hitters`).then((r) => r.json()),
+      fetch(`${BACKEND_URL}/api/game/${game.gamePk}/lineup`).then((r) => r.json()).catch(() => ({ available: false })),
     ])
-      .then(([homeData, awayData]) => {
-        const homeBatters = (homeData.hitters || [])
+      .then(([homeData, awayData, lineupData]) => {
+        let homeBatters = (homeData.hitters || [])
           .filter((h) => h.ab > 0 && h.g > 0)
           .map((h) => ({ ...h, team: game.homeCode, pitcher: pitcherFor(game.awayPitcher) }));
-        const awayBatters = (awayData.hitters || [])
+        let awayBatters = (awayData.hitters || [])
           .filter((h) => h.ab > 0 && h.g > 0)
           .map((h) => ({ ...h, team: game.awayCode, pitcher: pitcherFor(game.homePitcher) }));
+
+        // Si la alineación real de hoy ya está publicada, filtramos a SOLO
+        // los jugadores confirmados en ella — mucho más preciso que usar
+        // todo el roster activo (que incluye a quien esté descansando).
+        if (lineupData.available) {
+          const homeNames = new Set((lineupData.home || []).map((p) => p.name));
+          const awayNames = new Set((lineupData.away || []).map((p) => p.name));
+          homeBatters = homeBatters.filter((p) => homeNames.has(p.name));
+          awayBatters = awayBatters.filter((p) => awayNames.has(p.name));
+        }
+        setLineupAvailable(lineupData.available === true);
+
         const combined = [...homeBatters, ...awayBatters].map((p) => {
           const gp = gameProbabilities(p, p.pitcher, game.dayNight);
           return { id: p.id, name: p.name, team: p.team, pos: p.pos, hit: gp.hit, single: gp.single, double: gp.double, hr: gp.hr };
@@ -1408,6 +1422,11 @@ function TodayGamesHeader() {
             )}
           </div>
 
+          {hittersLoadStatus === "listo" && gameHitters.length > 0 && (
+            <div className="mb-2 text-[10px] font-semibold px-2 py-1 rounded-full inline-block" style={{ background: lineupAvailable ? "#1A362A" : "#12281E", color: lineupAvailable ? "#3FC97A" : "#8FA599" }}>
+              {lineupAvailable ? "✓ Alineación real de hoy confirmada" : "Alineación aún no publicada — usando roster activo completo"}
+            </div>
+          )}
           {hittersLoadStatus === "cargando" && (
             <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando probabilidades de los bateadores de ambos equipos…</p>
           )}
