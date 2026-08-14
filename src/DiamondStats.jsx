@@ -1221,6 +1221,29 @@ function TodayGamesHeader() {
     });
   }, [gameHitters]);
 
+  // Guarda automáticamente la predicción del partido que el usuario está
+  // viendo en Juegos de hoy — a diferencia del Predictor (que tenía fijo
+  // un solo partido de referencia), esto funciona para CUALQUIER partido
+  // real de hoy que se abra, cambiando día a día de verdad.
+  useEffect(() => {
+    if (!selectedGame) return;
+    const recHome = TEAM_RECORDS[selectedGame.homeCode];
+    const recAway = TEAM_RECORDS[selectedGame.awayCode];
+    const stadium = STADIUMS[selectedGame.homeCode];
+    if (!recHome || !recAway || !stadium) return;
+    const baseProb = log5(recHome.wpct, recAway.wpct);
+    const { prob: homeWinProb } = adjustedHomeProb({
+      baseProb, stadium, wind: "neutro", temp: "templado",
+      home: selectedGame.homeCode, away: selectedGame.awayCode,
+    });
+    const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    fetch(`${BACKEND_URL}/api/predictions/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_date: gameDate, home_code: selectedGame.homeCode, away_code: selectedGame.awayCode, home_win_prob: homeWinProb }),
+    }).catch(() => {});
+  }, [selectedGame]);
+
   if (status === "cargando") {
     return <div className="mb-6 text-[11px]" style={{ color: "#8FA599" }}>Buscando juegos de hoy…</div>;
   }
