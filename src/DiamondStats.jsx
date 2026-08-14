@@ -586,9 +586,11 @@ function Predictor({ probablesStatus, teamDayNight }) {
     const overall = TEAM_RECORDS[code].wpct;
     const dnPct = dayNight === "day" ? situationalWinPct(s.dayRecord) : dayNight === "night" ? situationalWinPct(s.nightRecord) : null;
     const wdPct = situationalWinPct(s.byWeekday?.[todayWeekday]);
+    const l10Pct = situationalWinPct(s.last10Record);
     let delta = 0;
     if (dnPct != null) delta += (dnPct - overall) * 0.3;
     if (wdPct != null) delta += (wdPct - overall) * 0.3;
+    if (l10Pct != null) delta += (l10Pct - overall) * 0.5; // más peso — su forma reciente es una señal más fuerte que día/noche o día de la semana
     return delta * sign;
   };
   const situationalAdjustment = situationalDelta(home, homeDayNight, 1) - situationalDelta(away, awayDayNight, 1);
@@ -1291,10 +1293,47 @@ function TodayGamesHeader() {
             const stadium = STADIUMS[selectedGame.homeCode];
             if (!recHome || !recAway || !stadium) return null;
             const baseProb = log5(recHome.wpct, recAway.wpct);
-            const { prob: homeWinProb, effectiveRunFactor } = adjustedHomeProb({
+            const { prob: baseHomeWinProb, effectiveRunFactor } = adjustedHomeProb({
               baseProb, stadium, wind: "neutro", temp: "templado",
               home: selectedGame.homeCode, away: selectedGame.awayCode,
             });
+
+            // Mismo ajuste situacional real que usa el Predictor: forma
+            // reciente (últimos 10, el de más peso), día/noche real de
+            // hoy, y día de la semana — todos comparados contra su % de
+            // victorias general de temporada.
+            const winPct = (record) => {
+              if (!record) return null;
+              const total = record.w + record.l;
+              return total >= 5 ? record.w / total : null;
+            };
+            const todayWd = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()];
+            const situationalDeltaFor = (code, dayNight) => {
+              const s = gameSituational[code];
+              if (!s) return 0;
+              const overall = TEAM_RECORDS[code].wpct;
+              const dnPct = dayNight === "day" ? winPct(s.dayRecord) : dayNight === "night" ? winPct(s.nightRecord) : null;
+              const wdPct = winPct(s.byWeekday?.[todayWd]);
+              const l10Pct = winPct(s.last10Record);
+              let delta = 0;
+              if (dnPct != null) delta += (dnPct - overall) * 0.3;
+              if (wdPct != null) delta += (wdPct - overall) * 0.3;
+              if (l10Pct != null) delta += (l10Pct - overall) * 0.5;
+              return delta;
+            };
+            const situationalAdj =
+              situationalDeltaFor(selectedGame.homeCode, selectedGame.dayNight) -
+              situationalDeltaFor(selectedGame.awayCode, selectedGame.dayNight);
+
+            // Mismo ajuste real de bullpen que usa el Predictor.
+            const homeBpEra = gameBullpen[selectedGame.homeCode]?.bullpenERA;
+            const awayBpEra = gameBullpen[selectedGame.awayCode]?.bullpenERA;
+            const bullpenAdj =
+              homeBpEra != null && awayBpEra != null
+                ? (LEAGUE_AVG_ERA - homeBpEra) * 0.025 - (LEAGUE_AVG_ERA - awayBpEra) * 0.025
+                : 0;
+
+            const homeWinProb = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj));
             const awayWinProb = 1 - homeWinProb;
 
             // Over/Under real: combina el park factor (+ clima, ya incluido
@@ -1310,7 +1349,7 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente)</div>
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -1418,6 +1457,7 @@ function TodayGamesHeader() {
                       <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
                       <div>{selectedGame.dayNight === "day" ? "De día" : "De noche"}: <b style={{ color: "#C9D6CD" }}>{dn ? `${dn.w}-${dn.l}` : "—"}</b></div>
                       <div>{todayWd}: <b style={{ color: "#C9D6CD" }}>{wd ? `${wd.w}-${wd.l}` : "—"}</b></div>
+                      <div>Últimos 10: <b style={{ color: "#FFB627" }}>{s?.last10Record ? `${s.last10Record.w}-${s.last10Record.l}` : "—"}</b></div>
                     </div>
                   );
                 })}
