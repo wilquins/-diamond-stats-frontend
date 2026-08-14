@@ -1330,18 +1330,21 @@ function TodayGamesHeader() {
           {/* Récord real situacional */}
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-              Récord real hoy ({selectedGame.dayNight === "day" ? "de día" : selectedGame.dayNight === "night" ? "de noche" : "—"})
+              Récord real hoy ({selectedGame.dayNight === "day" ? "de día" : selectedGame.dayNight === "night" ? "de noche" : "—"} · {["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()]})
             </div>
             {situationalStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando récords reales…</p>}
             {situationalStatus === "listo" && (
               <div className="grid grid-cols-2 gap-3">
                 {[{ code: selectedGame.awayCode, tag: "Visitante" }, { code: selectedGame.homeCode, tag: "Local" }].map(({ code, tag }) => {
                   const s = gameSituational[code];
+                  const todayWd = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()];
                   const dn = s && selectedGame.dayNight ? (selectedGame.dayNight === "day" ? s.dayRecord : s.nightRecord) : null;
+                  const wd = s?.byWeekday?.[todayWd];
                   return (
                     <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
                       <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
                       <div>{selectedGame.dayNight === "day" ? "De día" : "De noche"}: <b style={{ color: "#C9D6CD" }}>{dn ? `${dn.w}-${dn.l}` : "—"}</b></div>
+                      <div>{todayWd}: <b style={{ color: "#C9D6CD" }}>{wd ? `${wd.w}-${wd.l}` : "—"}</b></div>
                     </div>
                   );
                 })}
