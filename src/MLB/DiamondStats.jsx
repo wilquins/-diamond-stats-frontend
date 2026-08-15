@@ -536,6 +536,8 @@ function TodayGamesHeader() {
   const [situationalStatus, setSituationalStatus] = useState("idle");
   const [headToHead, setHeadToHead] = useState(null); // { gamesPlayed, homeTeamWins, awayTeamWins }
   const [headToHeadStatus, setHeadToHeadStatus] = useState("idle");
+  const [gameRest, setGameRest] = useState({}); // { [code]: { daysRested, lastGameDayNight, ... } }
+  const [restStatus, setRestStatus] = useState("idle");
   const [hitStreaks, setHitStreaks] = useState({}); // { [playerId]: number de juegos consecutivos con hit }
   const [lineupAvailable, setLineupAvailable] = useState(false); // ¿ya se publicó la alineación real de hoy?
   const [lineupData, setLineupDataState] = useState(null); // { home: [...], away: [...] } — la alineación real completa
@@ -680,6 +682,22 @@ function TodayGamesHeader() {
         setHeadToHeadStatus("listo");
       })
       .catch(() => setHeadToHeadStatus("error"));
+
+    // Descanso real de ambos equipos — cuántos días libres tuvieron antes
+    // de este partido, y si vienen de un "getaway day" (jugar de noche y
+    // al día siguiente de día, con poco descanso real).
+    const gameDateForRest = new Date(game.time).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    setRestStatus("cargando");
+    Promise.all(
+      [game.homeCode, game.awayCode].map((code) =>
+        fetch(`${BACKEND_URL}/api/team/${code}/rest?date=${gameDateForRest}`).then((r) => r.json()).then((data) => ({ code, data })).catch(() => ({ code, data: null }))
+      )
+    ).then((results) => {
+      const next = {};
+      for (const { code, data } of results) if (data && !data.error) next[code] = data;
+      setGameRest(next);
+      setRestStatus("listo");
+    });
   };
 
   const selectedGame = games.find((g) => g.gamePk === selectedGamePk);
@@ -804,7 +822,22 @@ function TodayGamesHeader() {
               h2hAdj = (h2hHomePct - 0.5) * 0.4;
             }
 
-            const homeWinProb = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj));
+            // Ajuste real de descanso/fatiga: penaliza levemente a un
+            // equipo que jugó ayer sin descanso (back-to-back), y un poco
+            // más si además fue un "getaway day" real (jugaron de noche
+            // ayer y hoy les toca de día, con poco descanso de verdad).
+            const fatiguePenalty = (rest) => {
+              if (!rest || rest.daysRested == null) return 0;
+              let penalty = 0;
+              if (rest.daysRested === 0) penalty -= 0.015;
+              if (rest.daysRested === 0 && rest.lastGameDayNight === "night" && selectedGame.dayNight === "day") penalty -= 0.015;
+              return penalty;
+            };
+            const homeFatigue = fatiguePenalty(gameRest[selectedGame.homeCode]);
+            const awayFatigue = fatiguePenalty(gameRest[selectedGame.awayCode]);
+            const fatigueAdj = homeFatigue - awayFatigue; // si el visitante está más cansado, esto suma a favor del local
+
+            const homeWinProb = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + fatigueAdj));
             const awayWinProb = 1 - homeWinProb;
 
             // Over/Under real: combina el park factor (+ clima, ya incluido
@@ -820,7 +853,7 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara + descanso)</div>
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -959,6 +992,35 @@ function TodayGamesHeader() {
                   </div>
                 )}
               </>
+            )}
+          </div>
+
+          {/* Descanso/fatiga real de ambos equipos */}
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+              Descanso real antes de este juego
+            </div>
+            {restStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando descanso real…</p>}
+            {restStatus === "listo" && (
+              <div className="grid grid-cols-2 gap-3">
+                {[{ code: selectedGame.awayCode, tag: "Visitante" }, { code: selectedGame.homeCode, tag: "Local" }].map(({ code, tag }) => {
+                  const rest = gameRest[code];
+                  const isGetaway = rest?.daysRested === 0 && rest?.lastGameDayNight === "night" && selectedGame.dayNight === "day";
+                  return (
+                    <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
+                      <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
+                      {rest?.daysRested == null ? (
+                        <div>—</div>
+                      ) : (
+                        <>
+                          <div>{rest.daysRested === 0 ? "Sin descanso (jugó ayer)" : `${rest.daysRested} día(s) de descanso`}</div>
+                          {isGetaway && <div style={{ color: "#C8393E" }}>⚠ Getaway day (de noche a de día)</div>}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
 
