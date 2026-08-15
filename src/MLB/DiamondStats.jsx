@@ -1175,6 +1175,31 @@ function DailyPicks() {
   }
   const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
 
+  // Guarda automáticamente los picks del día (los 3 bateadores y los 3
+  // equipos) en cuanto están listos, para poder comparar después contra
+  // el resultado real — igual que hacemos con las predicciones de juegos.
+  useEffect(() => {
+    if (loadStatus !== "listo" || topHitters.length === 0 || topTeams.length === 0) return;
+    const pickDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const picks = [
+      ...topHitters.map(({ player, prob }) => ({
+        pick_date: pickDate, pick_type: "batter",
+        player_id: player.id || null, player_name: player.name, team_code: player.team,
+        predicted_prob: prob / 100, // prob viene en escala 0-100, lo pasamos a 0-1 para guardarlo parejo con los equipos
+      })),
+      ...topTeams.map(({ code, rec, prob }) => ({
+        pick_date: pickDate, pick_type: "team",
+        player_id: null, player_name: rec.name, team_code: code,
+        predicted_prob: prob,
+      })),
+    ];
+    fetch(`${BACKEND_URL}/api/picks/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ picks }),
+    }).catch(() => {});
+  }, [loadStatus, teamsPlayingToday]);
+
   return (
     <div className="space-y-6">
       <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
@@ -1268,7 +1293,32 @@ function AccuracyView() {
       .catch(() => setChecking(false));
   };
 
+  // Precisión de Picks del día — misma idea, pero para los 3 bateadores y
+  // 3 equipos que la app recomienda cada día en esa pestaña.
+  const [picksData, setPicksData] = useState(null);
+  const [picksStatus, setPicksStatus] = useState("cargando");
+  const [checkingPicks, setCheckingPicks] = useState(false);
+
+  const loadPicks = () => {
+    setPicksStatus("cargando");
+    fetch(`${BACKEND_URL}/api/picks/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setPicksData(d); setPicksStatus("listo"); })
+      .catch(() => setPicksStatus("error"));
+  };
+
+  useEffect(() => { loadPicks(); }, []);
+
+  const checkPicksNow = () => {
+    setCheckingPicks(true);
+    fetch(`${BACKEND_URL}/api/picks/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { loadPicks(); setCheckingPicks(false); })
+      .catch(() => setCheckingPicks(false));
+  };
+
   return (
+    <div className="space-y-6">
     <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
       <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>
         Backtesting real — Fase 2
@@ -1332,6 +1382,76 @@ function AccuracyView() {
 
       <p className="text-[10px] mt-4 leading-relaxed" style={{ color: "#5A7368" }}>
         "Acertó al favorito" es simple: ¿ganó quien el modelo daba como más probable? El Brier Score es la métrica real de calibración — mide qué tan cerca estuvo el % exacto del resultado real, no solo si acertó la dirección. Un modelo honesto no necesita acertar siempre, necesita estar bien calibrado.
+      </p>
+    </div>
+
+    <PicksAccuracyView picksData={picksData} picksStatus={picksStatus} checkingPicks={checkingPicks} checkPicksNow={checkPicksNow} />
+    </div>
+  );
+}
+
+function PicksAccuracyView({ picksData, picksStatus, checkingPicks, checkPicksNow }) {
+  return (
+    <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>
+        Backtesting real — Picks del día
+      </div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
+        ¿Qué tan certeros son los Picks del día?
+      </h2>
+
+      <button
+        onClick={checkPicksNow}
+        disabled={checkingPicks}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checkingPicks ? 0.6 : 1 }}
+      >
+        {checkingPicks ? "Revisando resultados reales…" : "Revisar picks de días anteriores"}
+      </button>
+
+      {picksStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {picksStatus === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {picksStatus === "listo" && picksData && picksData.batters.total === 0 && picksData.teams.total === 0 && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          Todavía no hay picks comparados contra resultados reales. La app guarda los picks del día automáticamente cada vez que abres esa pestaña — vuelve en unos días y presiona "Revisar picks de días anteriores".
+        </p>
+      )}
+
+      {picksStatus === "listo" && picksData && (picksData.batters.total > 0 || picksData.teams.total > 0) && (
+        <>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                {picksData.batters.accuracy != null ? `${(picksData.batters.accuracy * 100).toFixed(1)}%` : "—"}
+              </div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Bateadores acertados ({picksData.batters.total})</div>
+            </div>
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                {picksData.teams.accuracy != null ? `${(picksData.teams.accuracy * 100).toFixed(1)}%` : "—"}
+              </div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Equipos acertados ({picksData.teams.total})</div>
+            </div>
+          </div>
+
+          <div className="text-[10px] tracking-widest uppercase mb-2 mt-4" style={{ color: "#8FA599" }}>Últimos picks comparados</div>
+          <div className="space-y-1.5">
+            {picksData.recent.map((r, i) => (
+              <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                <span style={{ color: "#C9D6CD" }}>{r.date} · {r.name} <span style={{ color: "#8FA599" }}>({r.team})</span></span>
+                <span style={{ color: "#8FA599" }}>{r.type === "batter" ? "Bateador" : "Equipo"} · {(r.prob * 100).toFixed(0)}%</span>
+                <span style={{ color: r.success ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>
+                  {r.success ? "✓ acertó" : "✗ falló"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      <p className="text-[10px] mt-4 leading-relaxed" style={{ color: "#5A7368" }}>
+        Para bateadores: ¿de verdad consiguió al menos un hit ese día? Para equipos: ¿de verdad ganó ese día? Datos reales, comparados juego por juego — no es el mismo backtesting que "Probabilidad de ganar", esto mide específicamente qué tan buenos son los picks que ves en esa pestaña.
       </p>
     </div>
   );
