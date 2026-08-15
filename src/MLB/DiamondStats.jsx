@@ -534,6 +534,8 @@ function TodayGamesHeader() {
   const [bullpenStatus, setBullpenStatus] = useState("idle");
   const [gameSituational, setGameSituational] = useState({}); // { [code]: {...} }
   const [situationalStatus, setSituationalStatus] = useState("idle");
+  const [headToHead, setHeadToHead] = useState(null); // { gamesPlayed, homeTeamWins, awayTeamWins }
+  const [headToHeadStatus, setHeadToHeadStatus] = useState("idle");
   const [hitStreaks, setHitStreaks] = useState({}); // { [playerId]: number de juegos consecutivos con hit }
   const [lineupAvailable, setLineupAvailable] = useState(false); // ¿ya se publicó la alineación real de hoy?
   const [lineupData, setLineupDataState] = useState(null); // { home: [...], away: [...] } — la alineación real completa
@@ -666,6 +668,18 @@ function TodayGamesHeader() {
       setGameSituational(next);
       setSituationalStatus("listo");
     });
+
+    // Historial real cara a cara entre estos dos equipos específicos, esta
+    // temporada — no es un promedio genérico, es su enfrentamiento real.
+    setHeadToHeadStatus("cargando");
+    fetch(`${BACKEND_URL}/api/matchup/${game.homeCode}/${game.awayCode}/headtohead`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.error) { setHeadToHeadStatus("error"); return; }
+        setHeadToHead(data);
+        setHeadToHeadStatus("listo");
+      })
+      .catch(() => setHeadToHeadStatus("error"));
   };
 
   const selectedGame = games.find((g) => g.gamePk === selectedGamePk);
@@ -781,7 +795,16 @@ function TodayGamesHeader() {
                 ? (LEAGUE_AVG_ERA - homeBpEra) * 0.025 - (LEAGUE_AVG_ERA - awayBpEra) * 0.025
                 : 0;
 
-            const homeWinProb = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj));
+            // Ajuste real de historial cara a cara — solo si hay al menos
+            // 3 juegos de muestra esta temporada entre estos dos equipos
+            // específicos, para no reaccionar a un solo juego suelto.
+            let h2hAdj = 0;
+            if (headToHead && headToHead.gamesPlayed >= 3) {
+              const h2hHomePct = headToHead.homeTeamWins / headToHead.gamesPlayed;
+              h2hAdj = (h2hHomePct - 0.5) * 0.4;
+            }
+
+            const homeWinProb = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj));
             const awayWinProb = 1 - homeWinProb;
 
             // Over/Under real: combina el park factor (+ clima, ya incluido
@@ -797,7 +820,7 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara)</div>
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -910,6 +933,32 @@ function TodayGamesHeader() {
                   );
                 })}
               </div>
+            )}
+          </div>
+
+          {/* Historial real cara a cara entre estos dos equipos */}
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+              Historial real cara a cara — temporada {new Date().getFullYear()}
+            </div>
+            {headToHeadStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando enfrentamientos reales…</p>}
+            {headToHeadStatus === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo traer el historial real.</p>}
+            {headToHeadStatus === "listo" && headToHead && (
+              <>
+                {headToHead.gamesPlayed === 0 ? (
+                  <p className="text-[11px]" style={{ color: "#8FA599" }}>No se han enfrentado todavía esta temporada.</p>
+                ) : (
+                  <div className="text-[11px]" style={{ color: "#8FA599" }}>
+                    <span style={{ color: "#EDEAE1" }}>{selectedGame.homeCode}</span> <b style={{ color: "#FFB627" }}>{headToHead.homeTeamWins}</b>
+                    {" — "}
+                    <b style={{ color: "#FFB627" }}>{headToHead.awayTeamWins}</b> <span style={{ color: "#EDEAE1" }}>{selectedGame.awayCode}</span>
+                    {" "}({headToHead.gamesPlayed} juegos esta temporada)
+                    {headToHead.gamesPlayed < 3 && (
+                      <span> — muestra muy chica todavía, no se usa para ajustar la probabilidad hasta llegar a 3 juegos</span>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
 
