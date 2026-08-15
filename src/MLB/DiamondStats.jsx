@@ -547,6 +547,32 @@ function TodayGamesHeader() {
         if (cancelled) return;
         setGames(data.games || []);
         setStatus("listo");
+
+        // Guarda automáticamente la predicción de TODOS los partidos
+        // reales de hoy, sin que el usuario tenga que entrar a cada uno.
+        // Usa el modelo base real (Log5 + localía + parque + ERA del
+        // abridor, cuando está confirmado) — no incluye bullpen ni forma
+        // reciente aquí, para no multiplicar decenas de llamadas extra
+        // solo por abrir la pestaña. Si luego entras al detalle de un
+        // partido específico, ese cálculo completo no sobreescribe esta
+        // predicción ya guardada (el backend evita duplicados por diseño).
+        const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+        for (const g of data.games || []) {
+          const recHome = TEAM_RECORDS[g.homeCode];
+          const recAway = TEAM_RECORDS[g.awayCode];
+          const stadium = STADIUMS[g.homeCode];
+          if (!recHome || !recAway || !stadium) continue;
+          const baseProb = log5(recHome.wpct, recAway.wpct);
+          const { prob: homeWinProb } = adjustedHomeProb({
+            baseProb, stadium, wind: "neutro", temp: "templado",
+            home: g.homeCode, away: g.awayCode,
+          });
+          fetch(`${BACKEND_URL}/api/predictions/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game_date: gameDate, home_code: g.homeCode, away_code: g.awayCode, home_win_prob: homeWinProb }),
+          }).catch(() => {});
+        }
       })
       .catch(() => { if (!cancelled) setStatus("error"); });
     return () => { cancelled = true; };
