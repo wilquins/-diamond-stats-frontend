@@ -825,8 +825,30 @@ function TodayGamesHeader() {
 
         <div className="p-4 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
           <div className="text-sm font-bold mb-1" style={{ color: "#EDEAE1" }}>{selectedGame.away} @ {selectedGame.home}</div>
-          <div className="text-[11px] mb-4" style={{ color: "#8FA599" }}>
-            {selectedGame.venue} · Abridores: {selectedGame.awayPitcher.name} vs. {selectedGame.homePitcher.name}
+          <div className="text-[11px] mb-3" style={{ color: "#8FA599" }}>{selectedGame.venue}</div>
+
+          {/* Abridores probables reales, con su ERA */}
+          <div className="mb-4 p-3 rounded-lg border grid grid-cols-2 gap-3" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div>
+              <div className="text-[10px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>{selectedGame.awayCode} · Abridor</div>
+              <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{selectedGame.awayPitcher.name}</div>
+              <div className="text-[11px]" style={{ color: "#8FA599" }}>
+                {selectedGame.awayPitcher.hand === "L" ? "Zurdo" : selectedGame.awayPitcher.hand === "R" ? "Derecho" : "Mano no confirmada"} ·{" "}
+                <b style={{ color: selectedGame.awayPitcher.era != null ? "#FFB627" : "#8FA599" }}>
+                  {selectedGame.awayPitcher.era != null ? `${selectedGame.awayPitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}
+                </b>
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>{selectedGame.homeCode} · Abridor</div>
+              <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{selectedGame.homePitcher.name}</div>
+              <div className="text-[11px]" style={{ color: "#8FA599" }}>
+                {selectedGame.homePitcher.hand === "L" ? "Zurdo" : selectedGame.homePitcher.hand === "R" ? "Derecho" : "Mano no confirmada"} ·{" "}
+                <b style={{ color: selectedGame.homePitcher.era != null ? "#FFB627" : "#8FA599" }}>
+                  {selectedGame.homePitcher.era != null ? `${selectedGame.homePitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}
+                </b>
+              </div>
+            </div>
           </div>
 
           {(() => {
