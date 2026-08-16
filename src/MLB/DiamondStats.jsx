@@ -171,6 +171,7 @@ async function computeFullHomeWinProb(game) {
   const { prob: baseHomeWinProb } = adjustedHomeProb({
     baseProb, stadium, wind: "neutro", temp: "templado",
     home: game.homeCode, away: game.awayCode,
+    homePitcher: game.homePitcher, awayPitcher: game.awayPitcher,
   });
 
   const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
@@ -455,7 +456,7 @@ function platoonEdge(teamCode, opposingPitcherHand) {
 // cada equipo. Día/noche y día de la semana se muestran como contexto pero
 // NO mueven el número — la evidencia de su efecto a nivel de equipo es
 // demasiado débil para justificar un ajuste numérico honesto.
-function adjustedHomeProb({ baseProb, stadium, wind, temp, home, away }) {
+function adjustedHomeProb({ baseProb, stadium, wind, temp, home, away, homePitcher: homePitcherArg, awayPitcher: awayPitcherArg }) {
   let effectiveRunFactor = stadium.runFactor;
   if (!stadium.roofed) {
     if (wind === "out") effectiveRunFactor += stadium.windSensitive ? 0.08 : 0.04;
@@ -465,13 +466,20 @@ function adjustedHomeProb({ baseProb, stadium, wind, temp, home, away }) {
   }
   const parkAdjustment = (effectiveRunFactor - 1) * 0.15;
 
-  const homePitcher = PITCHERS[home];
-  const awayPitcher = PITCHERS[away];
+  // Si nos pasan el pitcher real de ESTE partido específico, lo usamos —
+  // es más confiable que buscarlo en el objeto compartido PITCHERS (que
+  // se actualiza por separado y puede no estar sincronizado). Si no nos
+  // lo pasan (ej. desde Jugadores, donde se explora cualquier rival),
+  // caemos de vuelta al objeto compartido como antes.
+  const homePitcher = homePitcherArg || PITCHERS[home];
+  const awayPitcher = awayPitcherArg || PITCHERS[away];
   const homeBattersEdge = platoonEdge(home, awayPitcher.hand); // bateo local vs. abridor visitante
   const awayBattersEdge = platoonEdge(away, homePitcher.hand); // bateo visitante vs. abridor local
   const platoonAdjustment = (homeBattersEdge - awayBattersEdge) * 0.5;
 
-  const pitcherAdjustment = pitcherEdge(homePitcher.era) - pitcherEdge(awayPitcher.era);
+  const homeEraForCalc = homePitcher.era != null ? homePitcher.era : LEAGUE_AVG_ERA;
+  const awayEraForCalc = awayPitcher.era != null ? awayPitcher.era : LEAGUE_AVG_ERA;
+  const pitcherAdjustment = pitcherEdge(homeEraForCalc) - pitcherEdge(awayEraForCalc);
 
   const adjusted = baseProb + HOME_ADVANTAGE + parkAdjustment + platoonAdjustment + pitcherAdjustment;
   return {
@@ -796,6 +804,7 @@ function TodayGamesHeader() {
     const { prob: homeWinProb } = adjustedHomeProb({
       baseProb, stadium, wind: "neutro", temp: "templado",
       home: selectedGame.homeCode, away: selectedGame.awayCode,
+      homePitcher: selectedGame.homePitcher, awayPitcher: selectedGame.awayPitcher,
     });
     const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
     fetch(`${BACKEND_URL}/api/predictions/save`, {
@@ -860,6 +869,7 @@ function TodayGamesHeader() {
             const { prob: baseHomeWinProb, effectiveRunFactor } = adjustedHomeProb({
               baseProb, stadium, wind: "neutro", temp: "templado",
               home: selectedGame.homeCode, away: selectedGame.awayCode,
+              homePitcher: selectedGame.homePitcher, awayPitcher: selectedGame.awayPitcher,
             });
 
             // Mismo ajuste situacional real que usa el Predictor: forma
