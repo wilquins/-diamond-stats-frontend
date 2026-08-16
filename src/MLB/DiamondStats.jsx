@@ -553,29 +553,83 @@ function TodayGamesHeader() {
         setStatus("listo");
 
         // Guarda automáticamente la predicción de TODOS los partidos
-        // reales de hoy, sin que el usuario tenga que entrar a cada uno.
-        // Usa el modelo base real (Log5 + localía + parque + ERA del
-        // abridor, cuando está confirmado) — no incluye bullpen ni forma
-        // reciente aquí, para no multiplicar decenas de llamadas extra
-        // solo por abrir la pestaña. Si luego entras al detalle de un
-        // partido específico, ese cálculo completo no sobreescribe esta
-        // predicción ya guardada (el backend evita duplicados por diseño).
+        // reales de hoy, usando el MISMO modelo completo que se ve al
+        // entrar al detalle de un partido (Log5 + localía + parque +
+        // platoon + ERA + bullpen + forma reciente + cara a cara +
+        // descanso) — antes esto usaba una versión más simple, y por eso
+        // lo que medía Precisión no era realmente el modelo completo que
+        // construimos.
         const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+        const todayWd = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()];
+        const winPct = (record) => {
+          if (!record) return null;
+          const total = record.w + record.l;
+          return total >= 5 ? record.w / total : null;
+        };
+
         for (const g of data.games || []) {
           const recHome = TEAM_RECORDS[g.homeCode];
           const recAway = TEAM_RECORDS[g.awayCode];
           const stadium = STADIUMS[g.homeCode];
           if (!recHome || !recAway || !stadium) continue;
+
           const baseProb = log5(recHome.wpct, recAway.wpct);
-          const { prob: homeWinProb } = adjustedHomeProb({
+          const { prob: baseHomeWinProb } = adjustedHomeProb({
             baseProb, stadium, wind: "neutro", temp: "templado",
             home: g.homeCode, away: g.awayCode,
           });
-          fetch(`${BACKEND_URL}/api/predictions/save`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ game_date: gameDate, home_code: g.homeCode, away_code: g.awayCode, home_win_prob: homeWinProb }),
-          }).catch(() => {});
+
+          Promise.all([
+            fetch(`${BACKEND_URL}/api/team/${g.homeCode}/situational`).then((r) => r.json()).catch(() => null),
+            fetch(`${BACKEND_URL}/api/team/${g.awayCode}/situational`).then((r) => r.json()).catch(() => null),
+            fetch(`${BACKEND_URL}/api/team/${g.homeCode}/bullpen`).then((r) => r.json()).catch(() => null),
+            fetch(`${BACKEND_URL}/api/team/${g.awayCode}/bullpen`).then((r) => r.json()).catch(() => null),
+            fetch(`${BACKEND_URL}/api/matchup/${g.homeCode}/${g.awayCode}/headtohead`).then((r) => r.json()).catch(() => null),
+            fetch(`${BACKEND_URL}/api/team/${g.homeCode}/rest?date=${gameDate}`).then((r) => r.json()).catch(() => null),
+            fetch(`${BACKEND_URL}/api/team/${g.awayCode}/rest?date=${gameDate}`).then((r) => r.json()).catch(() => null),
+          ]).then(([homeSit, awaySit, homeBp, awayBp, h2h, homeRest, awayRest]) => {
+            const situationalDeltaFor = (rec, dayNight, overall) => {
+              if (!rec) return 0;
+              const dnPct = dayNight === "day" ? winPct(rec.dayRecord) : dayNight === "night" ? winPct(rec.nightRecord) : null;
+              const wdPct = winPct(rec.byWeekday?.[todayWd]);
+              const l10Pct = winPct(rec.last10Record);
+              let delta = 0;
+              if (dnPct != null) delta += (dnPct - overall) * 0.3;
+              if (wdPct != null) delta += (wdPct - overall) * 0.3;
+              if (l10Pct != null) delta += (l10Pct - overall) * 0.5;
+              return delta;
+            };
+            const situationalAdj =
+              situationalDeltaFor(homeSit, g.dayNight, recHome.wpct) - situationalDeltaFor(awaySit, g.dayNight, recAway.wpct);
+
+            const bullpenAdj =
+              homeBp?.bullpenERA != null && awayBp?.bullpenERA != null
+                ? (LEAGUE_AVG_ERA - homeBp.bullpenERA) * 0.025 - (LEAGUE_AVG_ERA - awayBp.bullpenERA) * 0.025
+                : 0;
+
+            let h2hAdj = 0;
+            if (h2h && h2h.gamesPlayed >= 3) {
+              const h2hHomePct = h2h.homeTeamWins / h2h.gamesPlayed;
+              h2hAdj = (h2hHomePct - 0.5) * 0.4;
+            }
+
+            const fatiguePenalty = (rest) => {
+              if (!rest || rest.daysRested == null) return 0;
+              let penalty = 0;
+              if (rest.daysRested === 0) penalty -= 0.015;
+              if (rest.daysRested === 0 && rest.lastGameDayNight === "night" && g.dayNight === "day") penalty -= 0.015;
+              return penalty;
+            };
+            const fatigueAdj = fatiguePenalty(homeRest) - fatiguePenalty(awayRest);
+
+            const homeWinProb = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + fatigueAdj));
+
+            fetch(`${BACKEND_URL}/api/predictions/save`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ game_date: gameDate, home_code: g.homeCode, away_code: g.awayCode, home_win_prob: homeWinProb }),
+            }).catch(() => {});
+          });
         }
       })
       .catch(() => { if (!cancelled) setStatus("error"); });
