@@ -1564,6 +1564,88 @@ export default function DiamondStats({ onBackToMenu }) {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  // Guarda automáticamente los Picks del día (3 bateadores + 3 equipos),
+  // igual que Juegos de hoy — sin necesitar abrir la pestaña "Picks del
+  // día" específicamente. Se dispara en cuanto se abre la app, sea cual
+  // sea la pestaña que se vea primero.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${BACKEND_URL}/api/games/today`)
+      .then((r) => r.json())
+      .then((gamesData) => {
+        if (cancelled) return;
+        const teamsPlayingToday = new Set();
+        const opponentOf = {};
+        for (const g of gamesData.games || []) {
+          if (g.homeCode) teamsPlayingToday.add(g.homeCode);
+          if (g.awayCode) teamsPlayingToday.add(g.awayCode);
+          if (g.homeCode && g.awayCode) {
+            opponentOf[g.homeCode] = g.awayCode;
+            opponentOf[g.awayCode] = g.homeCode;
+          }
+        }
+        if (teamsPlayingToday.size === 0) return;
+
+        Promise.all(
+          Object.keys(TEAM_IDS).map((code) =>
+            fetch(`${BACKEND_URL}/api/team/${code}/hitters`)
+              .then((r) => r.json())
+              .then((data) => (data.hitters || []).map((h) => ({ ...h, team: code })))
+              .catch(() => [])
+          )
+        ).then((results) => {
+          if (cancelled) return;
+          const allHitters = results.flat().filter((h) => h.ab > 0 && h.g > 0 && teamsPlayingToday.has(h.team));
+          const topHitters = allHitters
+            .map((p) => ({ player: p, prob: toGameProbability(hitProbabilities(p).hit, p.ab / p.g) }))
+            .sort((a, b) => b.prob - a.prob)
+            .slice(0, 3);
+
+          const seenMatchups = new Set();
+          const teamCandidates = [];
+          for (const code of teamsPlayingToday) {
+            if (!TEAM_RECORDS[code]) continue;
+            const rival = opponentOf[code];
+            if (rival && teamsPlayingToday.has(rival) && TEAM_RECORDS[rival]) {
+              const matchupKey = [code, rival].sort().join("-");
+              if (seenMatchups.has(matchupKey)) continue;
+              seenMatchups.add(matchupKey);
+              const headToHeadProb = log5(TEAM_RECORDS[code].wpct, TEAM_RECORDS[rival].wpct);
+              const winnerCode = headToHeadProb >= 0.5 ? code : rival;
+              const winnerProb = headToHeadProb >= 0.5 ? headToHeadProb : 1 - headToHeadProb;
+              teamCandidates.push({ code: winnerCode, rec: TEAM_RECORDS[winnerCode], prob: winnerProb });
+            } else {
+              teamCandidates.push({ code, rec: TEAM_RECORDS[code], prob: log5(TEAM_RECORDS[code].wpct, 0.5) });
+            }
+          }
+          const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
+
+          const pickDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+          const picks = [
+            ...topHitters.map(({ player, prob }) => ({
+              pick_date: pickDate, pick_type: "batter",
+              player_id: player.id || null, player_name: player.name, team_code: player.team,
+              predicted_prob: prob / 100,
+            })),
+            ...topTeams.map(({ code, rec, prob }) => ({
+              pick_date: pickDate, pick_type: "team",
+              player_id: null, player_name: rec.name, team_code: code,
+              predicted_prob: prob,
+            })),
+          ];
+          if (picks.length > 0) {
+            fetch(`${BACKEND_URL}/api/picks/save`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ picks }),
+            }).catch(() => {});
+          }
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   const [liveStatus, setLiveStatus] = useState("cargando"); // "cargando" | "en-vivo" | "respaldo"
   const [liveHitters, setLiveHitters] = useState({}); // { [teamCode]: player[] } — roster en vivo por equipo
   const [hittersStatus, setHittersStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
