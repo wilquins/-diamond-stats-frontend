@@ -847,7 +847,18 @@ function TodayGamesHeader() {
             const homeEra = selectedGame.homePitcher.era != null ? selectedGame.homePitcher.era : LEAGUE_AVG_ERA;
             const awayEra = selectedGame.awayPitcher.era != null ? selectedGame.awayPitcher.era : LEAGUE_AVG_ERA;
             const pitcherFactor = ((homeEra + awayEra) / 2) / LEAGUE_AVG_ERA;
-            const expectedRuns = BASELINE_TOTAL_RUNS * effectiveRunFactor * pitcherFactor;
+
+            // Ajuste real: si estos dos equipos específicos han anotado
+            // más (o menos) carreras entre ellos de lo normal esta
+            // temporada, eso empuja el número — con peso moderado (30%)
+            // para no sobre-reaccionar, y solo con 3+ juegos de muestra.
+            let h2hRunsFactor = 1;
+            if (headToHead && headToHead.gamesPlayed >= 3 && headToHead.overUnder?.avgTotalRuns != null) {
+              const ratio = headToHead.overUnder.avgTotalRuns / BASELINE_TOTAL_RUNS;
+              h2hRunsFactor = 1 + (ratio - 1) * 0.3;
+            }
+
+            const expectedRuns = BASELINE_TOTAL_RUNS * effectiveRunFactor * pitcherFactor * h2hRunsFactor;
             const { line, overProb, underProb } = estimateOverUnder(expectedRuns);
             const bothErasConfirmed = selectedGame.homePitcher.era != null && selectedGame.awayPitcher.era != null;
 
@@ -890,7 +901,7 @@ function TodayGamesHeader() {
                     </div>
                   </div>
                   <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-                    Carreras totales esperadas: {expectedRuns.toFixed(1)} — combina el promedio real de MLB esta temporada ({BASELINE_TOTAL_RUNS}, calculado de los 30 equipos), el park factor de {stadium.park}, y el ERA de ambos abridores{bothErasConfirmed ? "" : " (uno o ambos sin ERA confirmado hoy, se usó el promedio de liga como neutral)"}, pasado por una distribución de Poisson. Es un modelo estadístico real, no una garantía — no incluye lineup del día ni clima minuto a minuto.
+                    Carreras totales esperadas: {expectedRuns.toFixed(1)} — combina el promedio real de MLB esta temporada ({BASELINE_TOTAL_RUNS}, calculado de los 30 equipos), el park factor de {stadium.park}, el ERA de ambos abridores{bothErasConfirmed ? "" : " (uno o ambos sin ERA confirmado hoy, se usó el promedio de liga como neutral)"}{h2hRunsFactor !== 1 ? ", y su historial real de carreras entre ellos esta temporada" : ""}, pasado por una distribución de Poisson. Es un modelo estadístico real, no una garantía — no incluye lineup del día ni clima minuto a minuto.
                   </p>
                 </div>
               </div>
@@ -989,6 +1000,12 @@ function TodayGamesHeader() {
                     {headToHead.gamesPlayed < 3 && (
                       <span> — muestra muy chica todavía, no se usa para ajustar la probabilidad hasta llegar a 3 juegos</span>
                     )}
+                  </div>
+                )}
+                {headToHead.overUnder && (headToHead.overUnder.overCount + headToHead.overUnder.underCount) > 0 && (
+                  <div className="text-[11px] mt-2 pt-2" style={{ color: "#8FA599", borderTop: "1px dashed #2A4D3B" }}>
+                    Over/Under real (línea {headToHead.overUnder.referenceLine}): <b style={{ color: "#FFB627" }}>{headToHead.overUnder.overCount} Over</b> — <b style={{ color: "#FFB627" }}>{headToHead.overUnder.underCount} Under</b>
+                    {headToHead.overUnder.avgTotalRuns != null && <span> · promedio real de {headToHead.overUnder.avgTotalRuns} carreras combinadas entre ellos</span>}
                   </div>
                 )}
               </>
