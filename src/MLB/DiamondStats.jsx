@@ -1003,31 +1003,30 @@ function TodayGamesHeader() {
           })()}
 
           {/* Clima real del estadio */}
-          {weatherStatus !== "idle" && (
-            <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-              <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Clima real del estadio</div>
-              {weatherStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando clima real…</p>}
-              {weatherStatus === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo traer el clima real ahora mismo.</p>}
-              {weatherStatus === "listo" && gameWeather && (
-                <div className="flex items-center gap-3 flex-wrap">
-                  <span style={{ fontSize: "24px" }}>{gameWeather.icon}</span>
-                  <div>
-                    <div className="text-base font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{gameWeather.tempF.toFixed(1)}°F</div>
-                    <div className="text-[10px]" style={{ color: "#8FA599" }}>{gameWeather.description}</div>
-                  </div>
-                  <div className="text-[11px]" style={{ color: "#8FA599" }}>
-                    Humedad: <b style={{ color: "#C9D6CD" }}>{gameWeather.humidity}%</b> · Viento: <b style={{ color: "#C9D6CD" }}>{gameWeather.windMph.toFixed(1)} mph {gameWeather.windDir}</b> · P.O.P: <b style={{ color: "#C9D6CD" }}>{gameWeather.pop}%</b>
-                  </div>
-                  <div className="ml-auto">
-                    <WindFieldIcon deg={gameWeather.windDirDeg} mph={gameWeather.windMph} orientationDeg={HOME_PLATE_ORIENTATION[selectedGame.homeCode]} />
-                  </div>
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Clima real del estadio</div>
+            {weatherStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando clima real…</p>}
+            {weatherStatus === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo traer el clima real ahora mismo.</p>}
+            {weatherStatus === "listo" && gameWeather && (
+              <div className="flex items-center gap-3 flex-wrap">
+                <span style={{ fontSize: "24px" }}>{gameWeather.icon}</span>
+                <div>
+                  <div className="text-base font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{gameWeather.tempF.toFixed(1)}°F</div>
+                  <div className="text-[10px]" style={{ color: "#8FA599" }}>{gameWeather.description}</div>
                 </div>
-              )}
-              {weatherStatus === "idle" && stadium.roofed && (
-                <p className="text-[11px]" style={{ color: "#5A7368" }}>Estadio con techo cerrado — el clima no afecta este juego.</p>
-              )}
-            </div>
-          )}
+                <div className="text-[11px]" style={{ color: "#8FA599" }}>
+                  Humedad: <b style={{ color: "#C9D6CD" }}>{gameWeather.humidity}%</b> · Viento: <b style={{ color: "#C9D6CD" }}>{gameWeather.windMph.toFixed(1)} mph {gameWeather.windDir}</b> · P.O.P: <b style={{ color: "#C9D6CD" }}>{gameWeather.pop}%</b>
+                </div>
+                <div className="ml-auto">
+                  <WindFieldIcon deg={gameWeather.windDirDeg} mph={gameWeather.windMph} orientationDeg={HOME_PLATE_ORIENTATION[selectedGame.homeCode]} />
+                </div>
+              </div>
+            )}
+            {weatherStatus === "idle" && stadium.roofed && (
+              <p className="text-[11px]" style={{ color: "#5A7368" }}>Estadio con techo cerrado ({stadium.park}) — el clima no afecta este juego, por eso no se consulta.</p>
+            )}
+          </div>
+
 
           {/* Calidad real de bullpen */}
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
