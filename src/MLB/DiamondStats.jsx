@@ -154,6 +154,79 @@ function toGameProbability(perAbPct, abPerGame) {
   return (1 - Math.pow(1 - p, abPerGame)) * 100;
 }
 
+// Calcula la probabilidad de ganar de un partido usando el modelo
+// COMPLETO real (Log5 + localía + parque + platoon + ERA + bullpen +
+// forma reciente + cara a cara + descanso) — la misma cuenta exacta que
+// se ve al entrar al detalle de un partido en Juegos de hoy. Se comparte
+// aquí para no tener dos versiones del modelo corriendo por separado
+// (una completa en la pantalla, otra simplificada en el guardado
+// automático) — eso fue justo el error que corregimos.
+async function computeFullHomeWinProb(game) {
+  const recHome = TEAM_RECORDS[game.homeCode];
+  const recAway = TEAM_RECORDS[game.awayCode];
+  const stadium = STADIUMS[game.homeCode];
+  if (!recHome || !recAway || !stadium) return null;
+
+  const baseProb = log5(recHome.wpct, recAway.wpct);
+  const { prob: baseHomeWinProb } = adjustedHomeProb({
+    baseProb, stadium, wind: "neutro", temp: "templado",
+    home: game.homeCode, away: game.awayCode,
+  });
+
+  const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const todayWd = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()];
+  const winPct = (record) => {
+    if (!record) return null;
+    const total = record.w + record.l;
+    return total >= 5 ? record.w / total : null;
+  };
+
+  const [homeSit, awaySit, homeBp, awayBp, h2h, homeRest, awayRest] = await Promise.all([
+    fetch(`${BACKEND_URL}/api/team/${game.homeCode}/situational`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/team/${game.awayCode}/situational`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/team/${game.homeCode}/bullpen`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/team/${game.awayCode}/bullpen`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/matchup/${game.homeCode}/${game.awayCode}/headtohead`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/team/${game.homeCode}/rest?date=${gameDate}`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/team/${game.awayCode}/rest?date=${gameDate}`).then((r) => r.json()).catch(() => null),
+  ]);
+
+  const situationalDeltaFor = (rec, overall) => {
+    if (!rec) return 0;
+    const dnPct = game.dayNight === "day" ? winPct(rec.dayRecord) : game.dayNight === "night" ? winPct(rec.nightRecord) : null;
+    const wdPct = winPct(rec.byWeekday?.[todayWd]);
+    const l10Pct = winPct(rec.last10Record);
+    let delta = 0;
+    if (dnPct != null) delta += (dnPct - overall) * 0.3;
+    if (wdPct != null) delta += (wdPct - overall) * 0.3;
+    if (l10Pct != null) delta += (l10Pct - overall) * 0.5;
+    return delta;
+  };
+  const situationalAdj = situationalDeltaFor(homeSit, recHome.wpct) - situationalDeltaFor(awaySit, recAway.wpct);
+
+  const bullpenAdj =
+    homeBp?.bullpenERA != null && awayBp?.bullpenERA != null
+      ? (LEAGUE_AVG_ERA - homeBp.bullpenERA) * 0.025 - (LEAGUE_AVG_ERA - awayBp.bullpenERA) * 0.025
+      : 0;
+
+  let h2hAdj = 0;
+  if (h2h && h2h.gamesPlayed >= 3) {
+    const h2hHomePct = h2h.homeTeamWins / h2h.gamesPlayed;
+    h2hAdj = (h2hHomePct - 0.5) * 0.4;
+  }
+
+  const fatiguePenalty = (rest) => {
+    if (!rest || rest.daysRested == null) return 0;
+    let penalty = 0;
+    if (rest.daysRested === 0) penalty -= 0.015;
+    if (rest.daysRested === 0 && rest.lastGameDayNight === "night" && game.dayNight === "day") penalty -= 0.015;
+    return penalty;
+  };
+  const fatigueAdj = fatiguePenalty(homeRest) - fatiguePenalty(awayRest);
+
+  return Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + fatigueAdj));
+}
+
 function gameProbabilities(p, pitcher, todaysDayNight) {
   const perAb = matchupAdjustedProbs(p, pitcher, todaysDayNight);
   const abPerGame = p.ab / p.g;
@@ -553,77 +626,12 @@ function TodayGamesHeader() {
         setStatus("listo");
 
         // Guarda automáticamente la predicción de TODOS los partidos
-        // reales de hoy, usando el MISMO modelo completo que se ve al
-        // entrar al detalle de un partido (Log5 + localía + parque +
-        // platoon + ERA + bullpen + forma reciente + cara a cara +
-        // descanso) — antes esto usaba una versión más simple, y por eso
-        // lo que medía Precisión no era realmente el modelo completo que
-        // construimos.
+        // reales de hoy, usando la misma función compartida de arriba —
+        // así no hay dos versiones distintas del modelo corriendo.
         const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-        const todayWd = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()];
-        const winPct = (record) => {
-          if (!record) return null;
-          const total = record.w + record.l;
-          return total >= 5 ? record.w / total : null;
-        };
-
         for (const g of data.games || []) {
-          const recHome = TEAM_RECORDS[g.homeCode];
-          const recAway = TEAM_RECORDS[g.awayCode];
-          const stadium = STADIUMS[g.homeCode];
-          if (!recHome || !recAway || !stadium) continue;
-
-          const baseProb = log5(recHome.wpct, recAway.wpct);
-          const { prob: baseHomeWinProb } = adjustedHomeProb({
-            baseProb, stadium, wind: "neutro", temp: "templado",
-            home: g.homeCode, away: g.awayCode,
-          });
-
-          Promise.all([
-            fetch(`${BACKEND_URL}/api/team/${g.homeCode}/situational`).then((r) => r.json()).catch(() => null),
-            fetch(`${BACKEND_URL}/api/team/${g.awayCode}/situational`).then((r) => r.json()).catch(() => null),
-            fetch(`${BACKEND_URL}/api/team/${g.homeCode}/bullpen`).then((r) => r.json()).catch(() => null),
-            fetch(`${BACKEND_URL}/api/team/${g.awayCode}/bullpen`).then((r) => r.json()).catch(() => null),
-            fetch(`${BACKEND_URL}/api/matchup/${g.homeCode}/${g.awayCode}/headtohead`).then((r) => r.json()).catch(() => null),
-            fetch(`${BACKEND_URL}/api/team/${g.homeCode}/rest?date=${gameDate}`).then((r) => r.json()).catch(() => null),
-            fetch(`${BACKEND_URL}/api/team/${g.awayCode}/rest?date=${gameDate}`).then((r) => r.json()).catch(() => null),
-          ]).then(([homeSit, awaySit, homeBp, awayBp, h2h, homeRest, awayRest]) => {
-            const situationalDeltaFor = (rec, dayNight, overall) => {
-              if (!rec) return 0;
-              const dnPct = dayNight === "day" ? winPct(rec.dayRecord) : dayNight === "night" ? winPct(rec.nightRecord) : null;
-              const wdPct = winPct(rec.byWeekday?.[todayWd]);
-              const l10Pct = winPct(rec.last10Record);
-              let delta = 0;
-              if (dnPct != null) delta += (dnPct - overall) * 0.3;
-              if (wdPct != null) delta += (wdPct - overall) * 0.3;
-              if (l10Pct != null) delta += (l10Pct - overall) * 0.5;
-              return delta;
-            };
-            const situationalAdj =
-              situationalDeltaFor(homeSit, g.dayNight, recHome.wpct) - situationalDeltaFor(awaySit, g.dayNight, recAway.wpct);
-
-            const bullpenAdj =
-              homeBp?.bullpenERA != null && awayBp?.bullpenERA != null
-                ? (LEAGUE_AVG_ERA - homeBp.bullpenERA) * 0.025 - (LEAGUE_AVG_ERA - awayBp.bullpenERA) * 0.025
-                : 0;
-
-            let h2hAdj = 0;
-            if (h2h && h2h.gamesPlayed >= 3) {
-              const h2hHomePct = h2h.homeTeamWins / h2h.gamesPlayed;
-              h2hAdj = (h2hHomePct - 0.5) * 0.4;
-            }
-
-            const fatiguePenalty = (rest) => {
-              if (!rest || rest.daysRested == null) return 0;
-              let penalty = 0;
-              if (rest.daysRested === 0) penalty -= 0.015;
-              if (rest.daysRested === 0 && rest.lastGameDayNight === "night" && g.dayNight === "day") penalty -= 0.015;
-              return penalty;
-            };
-            const fatigueAdj = fatiguePenalty(homeRest) - fatiguePenalty(awayRest);
-
-            const homeWinProb = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + fatigueAdj));
-
+          computeFullHomeWinProb(g).then((homeWinProb) => {
+            if (homeWinProb == null) return;
             fetch(`${BACKEND_URL}/api/predictions/save`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1656,25 +1664,46 @@ export default function DiamondStats({ onBackToMenu }) {
             .sort((a, b) => b.prob - a.prob)
             .slice(0, 3);
 
-          const seenMatchups = new Set();
-          const teamCandidates = [];
-          for (const code of teamsPlayingToday) {
-            if (!TEAM_RECORDS[code]) continue;
-            const rival = opponentOf[code];
-            if (rival && teamsPlayingToday.has(rival) && TEAM_RECORDS[rival]) {
-              const matchupKey = [code, rival].sort().join("-");
-              if (seenMatchups.has(matchupKey)) continue;
-              seenMatchups.add(matchupKey);
-              const headToHeadProb = log5(TEAM_RECORDS[code].wpct, TEAM_RECORDS[rival].wpct);
-              const winnerCode = headToHeadProb >= 0.5 ? code : rival;
-              const winnerProb = headToHeadProb >= 0.5 ? headToHeadProb : 1 - headToHeadProb;
-              teamCandidates.push({ code: winnerCode, rec: TEAM_RECORDS[winnerCode], prob: winnerProb });
-            } else {
-              teamCandidates.push({ code, rec: TEAM_RECORDS[code], prob: log5(TEAM_RECORDS[code].wpct, 0.5) });
-            }
+          // Mapa de cada equipo hacia su juego real de hoy, para poder
+          // calcular su probabilidad completa (no solo Log5 básico).
+          const gameByCode = {};
+          for (const g of gamesData.games || []) {
+            if (g.homeCode) gameByCode[g.homeCode] = g;
+            if (g.awayCode) gameByCode[g.awayCode] = g;
           }
-          const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
 
+          const seenMatchups = new Set();
+          const uniqueGames = [];
+          for (const code of teamsPlayingToday) {
+            const g = gameByCode[code];
+            if (!g || !TEAM_RECORDS[g.homeCode] || !TEAM_RECORDS[g.awayCode]) continue;
+            const matchupKey = [g.homeCode, g.awayCode].sort().join("-");
+            if (seenMatchups.has(matchupKey)) continue;
+            seenMatchups.add(matchupKey);
+            uniqueGames.push(g);
+          }
+
+          Promise.all(uniqueGames.map((g) => computeFullHomeWinProb(g).then((homeWinProb) => ({ g, homeWinProb })))).then((results) => {
+            const teamCandidates = [];
+            for (const { g, homeWinProb } of results) {
+              if (homeWinProb == null) continue;
+              const awayWinProb = 1 - homeWinProb;
+              if (homeWinProb >= awayWinProb) {
+                teamCandidates.push({ code: g.homeCode, rec: TEAM_RECORDS[g.homeCode], prob: homeWinProb });
+              } else {
+                teamCandidates.push({ code: g.awayCode, rec: TEAM_RECORDS[g.awayCode], prob: awayWinProb });
+              }
+            }
+            const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
+            savePicksNow(topHitters, topTeams);
+          });
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  function savePicksNow(topHitters, topTeams) {
           const pickDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
           const picks = [
             ...topHitters.map(({ player, prob }) => ({
@@ -1695,11 +1724,8 @@ export default function DiamondStats({ onBackToMenu }) {
               body: JSON.stringify({ picks }),
             }).catch(() => {});
           }
-        });
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
+  }
+
   const [liveStatus, setLiveStatus] = useState("cargando"); // "cargando" | "en-vivo" | "respaldo"
   const [liveHitters, setLiveHitters] = useState({}); // { [teamCode]: player[] } — roster en vivo por equipo
   const [hittersStatus, setHittersStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
