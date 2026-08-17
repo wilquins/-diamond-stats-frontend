@@ -822,6 +822,7 @@ function TodayGamesHeader() {
   // Si hay un juego seleccionado, mostramos SOLO su detalle (con botón para
   // volver), en vez de agregarlo al final de la lista de juegos.
   if (selectedGame) {
+    const stadium = STADIUMS[selectedGame.homeCode];
     return (
       <div className="mb-6">
         <button
