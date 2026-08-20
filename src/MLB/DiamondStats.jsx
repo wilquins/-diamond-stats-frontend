@@ -1669,7 +1669,6 @@ export default function DiamondStats({ onBackToMenu }) {
       .then((r) => r.json())
       .then((gamesData) => {
         if (cancelled) return;
-        console.log("[Picks debug] games/today trajo", (gamesData.games || []).length, "juegos");
         const teamsPlayingToday = new Set();
         const opponentOf = {};
         for (const g of gamesData.games || []) {
@@ -1680,19 +1679,18 @@ export default function DiamondStats({ onBackToMenu }) {
             opponentOf[g.awayCode] = g.homeCode;
           }
         }
-        if (teamsPlayingToday.size === 0) { console.log("[Picks debug] no hay equipos jugando hoy, se detiene aquí"); return; }
+        if (teamsPlayingToday.size === 0) return;
 
         Promise.all(
           Object.keys(TEAM_IDS).map((code) =>
             fetch(`${BACKEND_URL}/api/team/${code}/hitters`)
               .then((r) => r.json())
               .then((data) => (data.hitters || []).map((h) => ({ ...h, team: code })))
-              .catch((err) => { console.log("[Picks debug] falló hitters de", code, err); return []; })
+              .catch(() => [])
           )
         ).then((results) => {
           if (cancelled) return;
           const allHitters = results.flat().filter((h) => h.ab > 0 && h.g > 0 && teamsPlayingToday.has(h.team));
-          console.log("[Picks debug] total bateadores elegibles:", allHitters.length);
           const topHitters = allHitters
             .map((p) => ({ player: p, prob: toGameProbability(hitProbabilities(p).hit, p.ab / p.g) }))
             .sort((a, b) => b.prob - a.prob)
@@ -1716,9 +1714,8 @@ export default function DiamondStats({ onBackToMenu }) {
             seenMatchups.add(matchupKey);
             uniqueGames.push(g);
           }
-          console.log("[Picks debug] juegos únicos para calcular equipos:", uniqueGames.length);
 
-          Promise.all(uniqueGames.map((g) => computeFullHomeWinProb(g).then((homeWinProb) => ({ g, homeWinProb })).catch((err) => { console.log("[Picks debug] falló computeFullHomeWinProb para", g.homeCode, "vs", g.awayCode, err); return { g, homeWinProb: null }; }))).then((results) => {
+          Promise.all(uniqueGames.map((g) => computeFullHomeWinProb(g).then((homeWinProb) => ({ g, homeWinProb })).catch(() => ({ g, homeWinProb: null })))).then((results) => {
             const teamCandidates = [];
             for (const { g, homeWinProb } of results) {
               if (homeWinProb == null) continue;
@@ -1730,12 +1727,11 @@ export default function DiamondStats({ onBackToMenu }) {
               }
             }
             const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
-            console.log("[Picks debug] topHitters:", topHitters.length, "topTeams:", topTeams.length, "— guardando ahora");
             savePicksNow(topHitters, topTeams);
           });
         });
       })
-      .catch((err) => console.log("[Picks debug] falló games/today", err));
+      .catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -1754,17 +1750,11 @@ export default function DiamondStats({ onBackToMenu }) {
             })),
           ];
           if (picks.length > 0) {
-            console.log("[Picks debug] enviando", picks.length, "picks al backend:", picks);
             fetch(`${BACKEND_URL}/api/picks/save`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ picks }),
-            })
-              .then((r) => r.json())
-              .then((data) => console.log("[Picks debug] respuesta del backend:", data))
-              .catch((err) => console.log("[Picks debug] falló el POST de guardado", err));
-          } else {
-            console.log("[Picks debug] picks.length es 0, no se envía nada");
+            }).catch(() => {});
           }
   }
 
