@@ -617,6 +617,8 @@ function TodayGamesHeader() {
   const [situationalStatus, setSituationalStatus] = useState("idle");
   const [headToHead, setHeadToHead] = useState(null); // { gamesPlayed, homeTeamWins, awayTeamWins }
   const [headToHeadStatus, setHeadToHeadStatus] = useState("idle");
+  const [computedWinProb, setComputedWinProb] = useState(null); // probabilidad real, calculada con la MISMA función que usa el guardado — para que la pantalla y lo guardado nunca se desincronicen
+  const [winProbStatus, setWinProbStatus] = useState("idle");
   const [gameRest, setGameRest] = useState({}); // { [code]: { daysRested, lastGameDayNight, ... } }
   const [restStatus, setRestStatus] = useState("idle");
   const [hitStreaks, setHitStreaks] = useState({}); // { [playerId]: number de juegos consecutivos con hit }
@@ -661,6 +663,16 @@ function TodayGamesHeader() {
     setSelectedGamePk(game.gamePk);
     setGameHitters([]);
     setHittersLoadStatus("cargando");
+
+    // Calcula la probabilidad de ganar con la MISMA función que usa el
+    // guardado automático — así lo que ves en pantalla es exactamente lo
+    // mismo que se guarda para Precisión, sin que puedan desincronizarse.
+    setComputedWinProb(null);
+    setWinProbStatus("cargando");
+    computeFullHomeWinProb(game).then((prob) => {
+      setComputedWinProb(prob);
+      setWinProbStatus(prob != null ? "listo" : "error");
+    });
 
     const pitcherFor = (p) => (p && p.name !== "Por confirmar" ? { hand: p.hand, era: p.era != null ? p.era : LEAGUE_AVG_ERA } : null);
 
@@ -861,79 +873,34 @@ function TodayGamesHeader() {
             </div>
           </div>
 
-          {(() => {
+          {winProbStatus === "cargando" && (
+            <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando probabilidad real (esperando bullpen, forma reciente, cara a cara y descanso)…</p>
+            </div>
+          )}
+
+          {winProbStatus === "listo" && (() => {
             const recHome = TEAM_RECORDS[selectedGame.homeCode];
             const recAway = TEAM_RECORDS[selectedGame.awayCode];
             const stadium = STADIUMS[selectedGame.homeCode];
             if (!recHome || !recAway || !stadium) return null;
+
+            // La probabilidad de ganar viene de computeFullHomeWinProb —
+            // la MISMA función que usa el guardado automático — así la
+            // pantalla y lo que se guarda para Precisión nunca se
+            // desincronizan entre sí.
+            const homeWinProb = computedWinProb;
+            const awayWinProb = 1 - homeWinProb;
+
+            // effectiveRunFactor solo hace falta para el Over/Under de
+            // abajo — se recalcula aquí de forma liviana (sin bullpen ni
+            // los demás ajustes, que no afectan al park factor).
             const baseProb = log5(recHome.wpct, recAway.wpct);
-            const { prob: baseHomeWinProb, effectiveRunFactor } = adjustedHomeProb({
+            const { effectiveRunFactor } = adjustedHomeProb({
               baseProb, stadium, wind: "neutro", temp: "templado",
               home: selectedGame.homeCode, away: selectedGame.awayCode,
               homePitcher: selectedGame.homePitcher, awayPitcher: selectedGame.awayPitcher,
             });
-
-            // Mismo ajuste situacional real que usa el Predictor: forma
-            // reciente (últimos 10, el de más peso), día/noche real de
-            // hoy, y día de la semana — todos comparados contra su % de
-            // victorias general de temporada.
-            const winPct = (record) => {
-              if (!record) return null;
-              const total = record.w + record.l;
-              return total >= 5 ? record.w / total : null;
-            };
-            const todayWd = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()];
-            const situationalDeltaFor = (code, dayNight) => {
-              const s = gameSituational[code];
-              if (!s) return 0;
-              const overall = TEAM_RECORDS[code].wpct;
-              const dnPct = dayNight === "day" ? winPct(s.dayRecord) : dayNight === "night" ? winPct(s.nightRecord) : null;
-              const wdPct = winPct(s.byWeekday?.[todayWd]);
-              const l10Pct = winPct(s.last10Record);
-              let delta = 0;
-              if (dnPct != null) delta += (dnPct - overall) * 0.3;
-              if (wdPct != null) delta += (wdPct - overall) * 0.3;
-              if (l10Pct != null) delta += (l10Pct - overall) * 0.5;
-              return delta;
-            };
-            const situationalAdj =
-              situationalDeltaFor(selectedGame.homeCode, selectedGame.dayNight) -
-              situationalDeltaFor(selectedGame.awayCode, selectedGame.dayNight);
-
-            // Mismo ajuste real de bullpen que usa el Predictor.
-            const homeBpEra = gameBullpen[selectedGame.homeCode]?.bullpenERA;
-            const awayBpEra = gameBullpen[selectedGame.awayCode]?.bullpenERA;
-            const bullpenAdj =
-              homeBpEra != null && awayBpEra != null
-                ? (LEAGUE_AVG_ERA - homeBpEra) * 0.025 - (LEAGUE_AVG_ERA - awayBpEra) * 0.025
-                : 0;
-
-            // Ajuste real de historial cara a cara — solo si hay al menos
-            // 3 juegos de muestra esta temporada entre estos dos equipos
-            // específicos, para no reaccionar a un solo juego suelto.
-            let h2hAdj = 0;
-            if (headToHead && headToHead.gamesPlayed >= 3) {
-              const h2hHomePct = headToHead.homeTeamWins / headToHead.gamesPlayed;
-              h2hAdj = (h2hHomePct - 0.5) * 0.4;
-            }
-
-            // Ajuste real de descanso/fatiga: penaliza levemente a un
-            // equipo que jugó ayer sin descanso (back-to-back), y un poco
-            // más si además fue un "getaway day" real (jugaron de noche
-            // ayer y hoy les toca de día, con poco descanso de verdad).
-            const fatiguePenalty = (rest) => {
-              if (!rest || rest.daysRested == null) return 0;
-              let penalty = 0;
-              if (rest.daysRested === 0) penalty -= 0.015;
-              if (rest.daysRested === 0 && rest.lastGameDayNight === "night" && selectedGame.dayNight === "day") penalty -= 0.015;
-              return penalty;
-            };
-            const homeFatigue = fatiguePenalty(gameRest[selectedGame.homeCode]);
-            const awayFatigue = fatiguePenalty(gameRest[selectedGame.awayCode]);
-            const fatigueAdj = homeFatigue - awayFatigue; // si el visitante está más cansado, esto suma a favor del local
-
-            const homeWinProb = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + fatigueAdj));
-            const awayWinProb = 1 - homeWinProb;
 
             // Over/Under real: combina el park factor (+ clima, ya incluido
             // en effectiveRunFactor) con el ERA de AMBOS abridores de este
