@@ -228,6 +228,93 @@ async function computeFullHomeWinProb(game) {
   return Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + fatigueAdj));
 }
 
+// Calcula los picks reales del día — 3 bateadores y 3 equipos — con la
+// MISMA lógica completa en un solo lugar: forma reciente real mezclada
+// con el promedio de temporada para bateadores, y el modelo completo de
+// 9 factores para equipos. Se comparte entre la pantalla visible de
+// "Picks del día" y el guardado automático para Precisión, así nunca
+// pueden mostrar números distintos entre sí.
+async function computeTodaysPicks() {
+  const gamesData = await fetch(`${BACKEND_URL}/api/games/today`).then((r) => r.json());
+  const teamsPlayingToday = new Set();
+  const gameByCode = {};
+  for (const g of gamesData.games || []) {
+    if (g.homeCode) { teamsPlayingToday.add(g.homeCode); gameByCode[g.homeCode] = g; }
+    if (g.awayCode) { teamsPlayingToday.add(g.awayCode); gameByCode[g.awayCode] = g; }
+  }
+  if (teamsPlayingToday.size === 0) return { topHitters: [], topTeams: [] };
+
+  // Bateadores: top 15 amplio por promedio de temporada, luego mezclado
+  // con su forma reciente real (últimos 10 juegos) para esos 15 nada más
+  // — no se hacen decenas de llamadas extra por cada elegible del día.
+  const hitterResults = await Promise.all(
+    Object.keys(TEAM_IDS).map((code) =>
+      fetch(`${BACKEND_URL}/api/team/${code}/hitters`)
+        .then((r) => r.json())
+        .then((data) => (data.hitters || []).map((h) => ({ ...h, team: code })))
+        .catch(() => [])
+    )
+  );
+  const allHitters = hitterResults.flat().filter((h) => h.ab > 0 && h.g > 0 && teamsPlayingToday.has(h.team));
+  const seasonRanked = allHitters
+    .map((p) => ({ player: p, seasonProb: toGameProbability(hitProbabilities(p).hit, p.ab / p.g) }))
+    .sort((a, b) => b.seasonProb - a.seasonProb)
+    .slice(0, 15);
+
+  const withRecentForm = await Promise.all(
+    seasonRanked.map(({ player, seasonProb }) =>
+      player.id
+        ? fetch(`${BACKEND_URL}/api/player/${player.id}/streak`)
+            .then((r) => r.json())
+            .then((data) => ({ player, seasonProb, recentAvg: data.recentAvg, recentGames: data.recentGames }))
+            .catch(() => ({ player, seasonProb, recentAvg: null, recentGames: 0 }))
+        : Promise.resolve({ player, seasonProb, recentAvg: null, recentGames: 0 })
+    )
+  );
+  // Mezcla real: con 5+ juegos recientes de muestra, su forma actual pesa
+  // mitad y mitad contra su promedio de toda la temporada.
+  const topHitters = withRecentForm
+    .map(({ player, seasonProb, recentAvg, recentGames }) => {
+      if (recentAvg == null || recentGames < 5) return { player, prob: seasonProb };
+      const seasonPerAb = hitProbabilities(player).hit / 100;
+      const blendedPerAb = seasonPerAb * 0.5 + recentAvg * 0.5;
+      return { player, prob: toGameProbability(blendedPerAb * 100, player.ab / player.g) };
+    })
+    .sort((a, b) => b.prob - a.prob)
+    .slice(0, 3);
+
+  // Equipos: un juego único por enfrentamiento real de hoy, con el modelo
+  // completo de 9 factores — se elige el lado (local o visitante) que
+  // tenga más probabilidad real de ganar.
+  const seenMatchups = new Set();
+  const uniqueGames = [];
+  for (const code of teamsPlayingToday) {
+    const g = gameByCode[code];
+    if (!g || !TEAM_RECORDS[g.homeCode] || !TEAM_RECORDS[g.awayCode]) continue;
+    const matchupKey = [g.homeCode, g.awayCode].sort().join("-");
+    if (seenMatchups.has(matchupKey)) continue;
+    seenMatchups.add(matchupKey);
+    uniqueGames.push(g);
+  }
+
+  const gameResults = await Promise.all(
+    uniqueGames.map((g) => computeFullHomeWinProb(g).then((homeWinProb) => ({ g, homeWinProb })).catch(() => ({ g, homeWinProb: null })))
+  );
+  const teamCandidates = [];
+  for (const { g, homeWinProb } of gameResults) {
+    if (homeWinProb == null) continue;
+    const awayWinProb = 1 - homeWinProb;
+    if (homeWinProb >= awayWinProb) {
+      teamCandidates.push({ code: g.homeCode, rec: TEAM_RECORDS[g.homeCode], prob: homeWinProb });
+    } else {
+      teamCandidates.push({ code: g.awayCode, rec: TEAM_RECORDS[g.awayCode], prob: awayWinProb });
+    }
+  }
+  const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
+
+  return { topHitters, topTeams };
+}
+
 function gameProbabilities(p, pitcher, todaysDayNight) {
   const perAb = matchupAdjustedProbs(p, pitcher, todaysDayNight);
   const abPerGame = p.ab / p.g;
@@ -1220,125 +1307,25 @@ function TodayGamesHeader() {
 }
 
 function DailyPicks() {
-  const [liveAllHitters, setLiveAllHitters] = useState(null); // null = aún cargando
+  const [picks, setPicks] = useState({ topHitters: [], topTeams: [] });
   const [loadStatus, setLoadStatus] = useState("cargando"); // "cargando" | "listo" | "error"
-  const [teamsPlayingToday, setTeamsPlayingToday] = useState(null); // null = aún cargando; luego Set de códigos
-  const [opponentOf, setOpponentOf] = useState({}); // { [teamCode]: rivalCode } — quién juega contra quién hoy
 
-  // Trae los juegos reales de hoy, para saber QUÉ equipos juegan Y contra
-  // QUIÉN — Picks del día debe mostrar solo jugadores y equipos con
-  // partido hoy, y nunca mostrar a dos equipos que se enfrentan entre sí
-  // como si ambos "fueran a ganar" (eso es imposible en el mismo juego).
+  // Usa la MISMA función compartida que el guardado automático — así
+  // esta pantalla nunca puede mostrar un número distinto al que se
+  // guarda para comparar después en Precisión.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND_URL}/api/games/today`)
-      .then((r) => r.json())
-      .then((data) => {
+    computeTodaysPicks()
+      .then(({ topHitters, topTeams }) => {
         if (cancelled) return;
-        const set = new Set();
-        const opp = {};
-        for (const g of data.games || []) {
-          if (g.homeCode) set.add(g.homeCode);
-          if (g.awayCode) set.add(g.awayCode);
-          if (g.homeCode && g.awayCode) {
-            opp[g.homeCode] = g.awayCode;
-            opp[g.awayCode] = g.homeCode;
-          }
-        }
-        setTeamsPlayingToday(set);
-        setOpponentOf(opp);
-      })
-      .catch(() => { if (!cancelled) setTeamsPlayingToday(new Set()); });
-    return () => { cancelled = true; };
-  }, []);
-
-  // Trae bateadores reales de los 30 equipos (en paralelo) para calcular el
-  // top del día con datos genuinamente en vivo, no una lista fija curada.
-  // El backend cachea cada equipo 15 minutos, así que esto no golpea la
-  // MLB Stats API de más en visitas seguidas.
-  useEffect(() => {
-    let cancelled = false;
-    const codes = Object.keys(TEAM_IDS);
-    Promise.all(
-      codes.map((code) =>
-        fetch(`${BACKEND_URL}/api/team/${code}/hitters`)
-          .then((r) => r.json())
-          .then((data) => (data.hitters || []).map((h) => ({ ...h, team: code })))
-          .catch(() => [])
-      )
-    )
-      .then((results) => {
-        if (cancelled) return;
-        const all = results.flat().filter((h) => h.ab > 0 && h.g > 0);
-        setLiveAllHitters(all);
+        setPicks({ topHitters, topTeams });
         setLoadStatus("listo");
       })
       .catch(() => { if (!cancelled) setLoadStatus("error"); });
     return () => { cancelled = true; };
   }, []);
 
-  // Solo bateadores de equipos con partido real hoy — si el dato de juegos
-  // de hoy aún no cargó, no filtramos (mejor mostrar algo que nada), pero
-  // en cuanto llega, se aplica el filtro real.
-  const eligibleHitters = (liveAllHitters || []).filter(
-    (p) => !teamsPlayingToday || teamsPlayingToday.size === 0 || teamsPlayingToday.has(p.team)
-  );
-
-  const topHitters = eligibleHitters
-    .map((p) => ({ player: p, prob: toGameProbability(hitProbabilities(p).hit, p.ab / p.g) }))
-    .sort((a, b) => b.prob - a.prob)
-    .slice(0, 3);
-
-  // Top 3 equipos por probabilidad de ganar hoy — solo entre equipos con
-  // partido real. Si dos equipos del top se enfrentan ENTRE SÍ hoy, no
-  // pueden aparecer los dos como "van a ganar" (es el mismo juego) — se
-  // resuelve con Log5 real cabeza a cabeza, y solo se queda el que
-  // realmente favorece esa comparación directa.
-  const eligibleTeamCodes = Object.keys(TEAM_RECORDS).filter(
-    (code) => !teamsPlayingToday || teamsPlayingToday.size === 0 || teamsPlayingToday.has(code)
-  );
-  const seenMatchups = new Set();
-  const teamCandidates = [];
-  for (const code of eligibleTeamCodes) {
-    const rival = opponentOf[code];
-    if (rival && eligibleTeamCodes.includes(rival)) {
-      const matchupKey = [code, rival].sort().join("-");
-      if (seenMatchups.has(matchupKey)) continue;
-      seenMatchups.add(matchupKey);
-      const headToHeadProb = log5(TEAM_RECORDS[code].wpct, TEAM_RECORDS[rival].wpct);
-      const winnerCode = headToHeadProb >= 0.5 ? code : rival;
-      const winnerProb = headToHeadProb >= 0.5 ? headToHeadProb : 1 - headToHeadProb;
-      teamCandidates.push({ code: winnerCode, rec: TEAM_RECORDS[winnerCode], prob: winnerProb });
-    } else {
-      teamCandidates.push({ code, rec: TEAM_RECORDS[code], prob: log5(TEAM_RECORDS[code].wpct, 0.5) });
-    }
-  }
-  const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
-
-  // Guarda automáticamente los picks del día (los 3 bateadores y los 3
-  // equipos) en cuanto están listos, para poder comparar después contra
-  // el resultado real — igual que hacemos con las predicciones de juegos.
-  useEffect(() => {
-    if (loadStatus !== "listo" || topHitters.length === 0 || topTeams.length === 0) return;
-    const pickDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-    const picks = [
-      ...topHitters.map(({ player, prob }) => ({
-        pick_date: pickDate, pick_type: "batter",
-        player_id: player.id || null, player_name: player.name, team_code: player.team,
-        predicted_prob: prob / 100, // prob viene en escala 0-100, lo pasamos a 0-1 para guardarlo parejo con los equipos
-      })),
-      ...topTeams.map(({ code, rec, prob }) => ({
-        pick_date: pickDate, pick_type: "team",
-        player_id: null, player_name: rec.name, team_code: code,
-        predicted_prob: prob,
-      })),
-    ];
-    fetch(`${BACKEND_URL}/api/picks/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ picks }),
-    }).catch(() => {});
-  }, [loadStatus, teamsPlayingToday]);
+  const { topHitters, topTeams } = picks;
 
   return (
     <div className="space-y-6">
@@ -1350,7 +1337,7 @@ function DailyPicks() {
           Mayor probabilidad de hit hoy
         </h2>
         {loadStatus === "cargando" && (
-          <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando bateadores reales de los 30 equipos…</p>
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con datos reales de los 30 equipos (temporada + forma reciente)…</p>
         )}
         {loadStatus === "error" && (
           <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend en vivo ahora mismo.</p>
@@ -1374,7 +1361,7 @@ function DailyPicks() {
           </div>
         )}
         <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
-          Probabilidad de conseguir al menos un hit en el juego, calculada con datos reales — solo entre jugadores cuyo equipo tiene partido real hoy. No ajustada por el pitcher rival específico.
+          Combina su promedio de toda la temporada con su forma REAL de los últimos 10 juegos (mitad y mitad, cuando hay muestra suficiente) — un jugador frío de verdad baja, uno caliente de verdad sube. Solo entre jugadores cuyo equipo tiene partido real hoy. No ajustada por el pitcher rival específico.
         </p>
       </div>
 
@@ -1385,24 +1372,29 @@ function DailyPicks() {
         <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
           Mayor probabilidad de ganar hoy
         </h2>
-        <div className="space-y-3">
-          {topTeams.map(({ code, rec, prob }, i) => (
-            <div key={code} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
-              <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
-                {i + 1}
+        {loadStatus === "cargando" && (
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 9 factores…</p>
+        )}
+        {loadStatus === "listo" && (
+          <div className="space-y-3">
+            {topTeams.map(({ code, rec, prob }, i) => (
+              <div key={code} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
+                <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                  {i + 1}
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{rec.name}</div>
+                  <div className="text-[11px]" style={{ color: "#8FA599" }}>{rec.w}-{rec.l} · {rec.wpct.toFixed(3)} PCT</div>
+                </div>
+                <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                  {(prob * 100).toFixed(1)}%
+                </div>
               </div>
-              <div className="flex-1">
-                <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{rec.name}</div>
-                <div className="text-[11px]" style={{ color: "#8FA599" }}>{rec.w}-{rec.l} · {rec.wpct.toFixed(3)} PCT</div>
-              </div>
-              <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
-                {(prob * 100).toFixed(1)}%
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
         <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-          Probabilidad Log5 contra un rival promedio de liga (.500) — solo entre equipos con partido real hoy. Refleja su nivel general de temporada, no el rival específico de hoy (para eso, entra al partido en Juegos de hoy).
+          Usa el mismo modelo completo de 9 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara + descanso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
         </p>
       </div>
     </div>
@@ -1627,78 +1619,14 @@ export default function DiamondStats({ onBackToMenu }) {
   }, []);
 
   // Guarda automáticamente los Picks del día (3 bateadores + 3 equipos),
-  // igual que Juegos de hoy — sin necesitar abrir la pestaña "Picks del
-  // día" específicamente. Se dispara en cuanto se abre la app, sea cual
-  // sea la pestaña que se vea primero.
+  // usando la función compartida computeTodaysPicks — la MISMA que usa
+  // la pantalla visible, así nunca pueden mostrar números distintos.
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND_URL}/api/games/today`)
-      .then((r) => r.json())
-      .then((gamesData) => {
-        if (cancelled) return;
-        const teamsPlayingToday = new Set();
-        const opponentOf = {};
-        for (const g of gamesData.games || []) {
-          if (g.homeCode) teamsPlayingToday.add(g.homeCode);
-          if (g.awayCode) teamsPlayingToday.add(g.awayCode);
-          if (g.homeCode && g.awayCode) {
-            opponentOf[g.homeCode] = g.awayCode;
-            opponentOf[g.awayCode] = g.homeCode;
-          }
-        }
-        if (teamsPlayingToday.size === 0) return;
-
-        Promise.all(
-          Object.keys(TEAM_IDS).map((code) =>
-            fetch(`${BACKEND_URL}/api/team/${code}/hitters`)
-              .then((r) => r.json())
-              .then((data) => (data.hitters || []).map((h) => ({ ...h, team: code })))
-              .catch(() => [])
-          )
-        ).then((results) => {
-          if (cancelled) return;
-          const allHitters = results.flat().filter((h) => h.ab > 0 && h.g > 0 && teamsPlayingToday.has(h.team));
-          const topHitters = allHitters
-            .map((p) => ({ player: p, prob: toGameProbability(hitProbabilities(p).hit, p.ab / p.g) }))
-            .sort((a, b) => b.prob - a.prob)
-            .slice(0, 3);
-
-          // Mapa de cada equipo hacia su juego real de hoy, para poder
-          // calcular su probabilidad completa (no solo Log5 básico).
-          const gameByCode = {};
-          for (const g of gamesData.games || []) {
-            if (g.homeCode) gameByCode[g.homeCode] = g;
-            if (g.awayCode) gameByCode[g.awayCode] = g;
-          }
-
-          const seenMatchups = new Set();
-          const uniqueGames = [];
-          for (const code of teamsPlayingToday) {
-            const g = gameByCode[code];
-            if (!g || !TEAM_RECORDS[g.homeCode] || !TEAM_RECORDS[g.awayCode]) continue;
-            const matchupKey = [g.homeCode, g.awayCode].sort().join("-");
-            if (seenMatchups.has(matchupKey)) continue;
-            seenMatchups.add(matchupKey);
-            uniqueGames.push(g);
-          }
-
-          Promise.all(uniqueGames.map((g) => computeFullHomeWinProb(g).then((homeWinProb) => ({ g, homeWinProb })).catch(() => ({ g, homeWinProb: null })))).then((results) => {
-            const teamCandidates = [];
-            for (const { g, homeWinProb } of results) {
-              if (homeWinProb == null) continue;
-              const awayWinProb = 1 - homeWinProb;
-              if (homeWinProb >= awayWinProb) {
-                teamCandidates.push({ code: g.homeCode, rec: TEAM_RECORDS[g.homeCode], prob: homeWinProb });
-              } else {
-                teamCandidates.push({ code: g.awayCode, rec: TEAM_RECORDS[g.awayCode], prob: awayWinProb });
-              }
-            }
-            const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
-            savePicksNow(topHitters, topTeams);
-          });
-        });
-      })
-      .catch(() => {});
+    computeTodaysPicks().then(({ topHitters, topTeams }) => {
+      if (cancelled) return;
+      if (topHitters.length > 0 || topTeams.length > 0) savePicksNow(topHitters, topTeams);
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
