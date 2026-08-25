@@ -225,7 +225,20 @@ async function computeFullHomeWinProb(game) {
   };
   const fatigueAdj = fatiguePenalty(homeRest) - fatiguePenalty(awayRest);
 
-  return Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + fatigueAdj));
+  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + fatigueAdj));
+
+  // ---- Corrección de calibración real ----
+  // Con 143 predicciones reales comparadas en Precisión, se encontró que
+  // el modelo estaba sobreconfiado específicamente en partidos parejos
+  // (30-70% de confianza): decía 54-64% cuando en la realidad ganaba
+  // 39-53% de las veces. En 70%+ SÍ estaba bien calibrado, así que solo
+  // se suaviza la zona donde hay evidencia real del problema — reduce a
+  // la mitad el "exceso" de confianza respecto al 50%, sin invertir la
+  // dirección ni tocar los rangos que ya funcionan bien.
+  if (clamped > 0.3 && clamped < 0.7) {
+    return 0.5 + (clamped - 0.5) * 0.5;
+  }
+  return clamped;
 }
 
 // Calcula los picks reales del día — 3 bateadores y 3 equipos — con la
