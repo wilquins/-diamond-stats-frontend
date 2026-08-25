@@ -1495,6 +1495,31 @@ function AccuracyView() {
           </div>
           <div className="text-[11px] mb-2" style={{ color: "#8FA599" }}>Basado en {data.totalChecked} predicciones reales comparadas.</div>
 
+          {data.calibration && data.calibration.some((c) => c.count > 0) && (
+            <>
+              <div className="text-[10px] tracking-widest uppercase mb-2 mt-4" style={{ color: "#8FA599" }}>Calibración real por rango de confianza</div>
+              <div className="space-y-1.5 mb-2">
+                {data.calibration.filter((c) => c.count > 0).map((c) => {
+                  const diff = c.actualRate - c.predictedAvg; // positivo = subconfiado, negativo = sobreconfiado
+                  const diffPct = (diff * 100).toFixed(1);
+                  return (
+                    <div key={c.label} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                      <span style={{ color: "#EDEAE1" }}>{c.label} <span style={{ color: "#8FA599" }}>({c.count} casos)</span></span>
+                      <span style={{ color: "#8FA599" }}>Dio {(c.predictedAvg * 100).toFixed(1)}% en promedio</span>
+                      <span style={{ color: "#C9D6CD" }}>Ganó {(c.actualRate * 100).toFixed(1)}% real</span>
+                      <span style={{ color: Math.abs(diff) < 0.08 ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>
+                        {Math.abs(diff) < 0.08 ? "✓ bien calibrado" : diff < 0 ? `Sobreconfiado (${diffPct}pp)` : `Subconfiado (+${diffPct}pp)`}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[10px] mb-2 leading-relaxed" style={{ color: "#5A7368" }}>
+                Esto compara, para cada rango de confianza, qué tanto dijo el modelo en promedio contra qué tanto pasó de verdad. Si en "80-90%" el favorito solo ganó 65% de las veces reales, el modelo está sobreconfiado en ese rango — bueno saberlo antes de confiar ciegamente en un número alto.
+              </p>
+            </>
+          )}
+
           <div className="text-[10px] tracking-widest uppercase mb-2 mt-4" style={{ color: "#8FA599" }}>Últimas comparaciones</div>
           <div className="space-y-1.5">
             {data.recent.map((r, i) => {
