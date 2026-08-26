@@ -1419,22 +1419,29 @@ function AccuracyView() {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
   const [checking, setChecking] = useState(false);
+  // Fecha real en que se aplicó la corrección de calibración (25 ago
+  // 2026) — confirmada por el primer lote de predicciones nuevas tras
+  // subir el cambio. Sirve para comparar limpio, sin mezclar viejo y
+  // nuevo en el mismo promedio.
+  const CALIBRATION_FIX_DATE = "2026-08-25";
+  const [onlyRecent, setOnlyRecent] = useState(false);
 
-  const load = () => {
+  const load = (recentOnly) => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/predictions/accuracy`)
+    const sinceParam = recentOnly ? `?since=${CALIBRATION_FIX_DATE}` : "";
+    fetch(`${BACKEND_URL}/api/predictions/accuracy${sinceParam}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(onlyRecent); }, [onlyRecent]);
 
   const checkNow = () => {
     setChecking(true);
     fetch(`${BACKEND_URL}/api/predictions/check`, { method: "POST" })
       .then((r) => r.json())
-      .then(() => { load(); setChecking(false); })
+      .then(() => { load(onlyRecent); setChecking(false); })
       .catch(() => setChecking(false));
   };
 
@@ -1472,14 +1479,23 @@ function AccuracyView() {
         ¿Qué tan certero es el modelo?
       </h2>
 
-      <button
-        onClick={checkNow}
-        disabled={checking}
-        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
-        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
-      >
-        {checking ? "Revisando resultados reales…" : "Revisar predicciones de días anteriores"}
-      </button>
+      <div className="flex flex-wrap gap-2 mb-4">
+        <button
+          onClick={checkNow}
+          disabled={checking}
+          className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+          style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+        >
+          {checking ? "Revisando resultados reales…" : "Revisar predicciones de días anteriores"}
+        </button>
+        <button
+          onClick={() => setOnlyRecent((v) => !v)}
+          className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+          style={{ background: onlyRecent ? "#FFB627" : "#12281E", color: onlyRecent ? "#0B1F17" : "#8FA599", border: "1px solid " + (onlyRecent ? "#FFB627" : "#1F3D30") }}
+        >
+          {onlyRecent ? `✓ Solo desde ${CALIBRATION_FIX_DATE} (corrección activa)` : "Ver todo el historial"}
+        </button>
+      </div>
 
       {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
       {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
