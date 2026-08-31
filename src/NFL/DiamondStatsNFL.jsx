@@ -2,16 +2,60 @@ import React, { useState, useEffect } from "react";
 
 const BACKEND_URL = "https://diamond-stats-backend.onrender.com";
 
+// ---- Modelo de predicción — Fase 2 ----
+// Mismo principio de Log5 que usamos en MLB, adaptado a NFL.
+function log5(pctA, pctB) {
+  const denom = pctA + pctB - 2 * pctA * pctB;
+  if (denom === 0) return 0.5;
+  return (pctA - pctA * pctB) / denom;
+}
+
+// Ventaja real de jugar en casa en la NFL — usamos el promedio de los
+// ÚLTIMOS 5 años (53.2%), no el histórico viejo (57-60%). Está confirmado
+// con evidencia real que esa ventaja se ha reducido mucho desde 2019 —
+// usar el número viejo sobreestimaría al local de forma injusta hoy.
+const NFL_HOME_ADVANTAGE = 0.032;
+
+// Calcula la probabilidad real de ganar de un partido de NFL, combinando
+// el récord de temporada (Log5) con el diferencial de puntos por juego
+// de cada equipo — una señal más fina que el récord solo, útil sobre
+// todo temprano en la temporada cuando hay pocos juegos de muestra.
+function computeNflWinProb(home, away) {
+  if (!home || !away) return null;
+  const baseProb = log5(home.winPercent ?? 0.5, away.winPercent ?? 0.5);
+
+  const gamesHome = home.wins + home.losses + home.ties;
+  const gamesAway = away.wins + away.losses + away.ties;
+  const homeDiffPerGame = gamesHome > 0 ? (home.pointsFor - home.pointsAgainst) / gamesHome : 0;
+  const awayDiffPerGame = gamesAway > 0 ? (away.pointsFor - away.pointsAgainst) / gamesAway : 0;
+  // Cada punto de diferencial promedio de más vale ~2% de probabilidad,
+  // con un tope para que un solo partido con marcador exagerado no
+  // distorsione todo el cálculo.
+  const diffAdj = Math.max(-0.15, Math.min(0.15, (homeDiffPerGame - awayDiffPerGame) * 0.02));
+
+  const prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj;
+  return Math.min(0.92, Math.max(0.08, prob));
+}
+
 // ---- Semana de la semana de juegos ----
 function GamesWeek() {
   const [data, setData] = useState(null);
+  const [standingsMap, setStandingsMap] = useState({});
   const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`${BACKEND_URL}/api/nfl/games`)
-      .then((r) => r.json())
-      .then((d) => { if (!cancelled) { setData(d); setStatus("listo"); } })
+    Promise.all([
+      fetch(`${BACKEND_URL}/api/nfl/games`).then((r) => r.json()),
+      fetch(`${BACKEND_URL}/api/nfl/standings`).then((r) => r.json()).catch(() => ({ teams: [] })),
+    ])
+      .then(([gamesData, standingsData]) => {
+        if (cancelled) return;
+        setData(gamesData);
+        const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
+        setStandingsMap(map);
+        setStatus("listo");
+      })
       .catch(() => { if (!cancelled) setStatus("error"); });
     return () => { cancelled = true; };
   }, []);
@@ -26,28 +70,42 @@ function GamesWeek() {
         {data.week ? `Semana ${data.week}` : "Juegos"}
       </div>
       <div className="flex flex-col gap-2.5">
-        {data.games.map((g) => (
-          <div key={g.id} className="p-4 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] tracking-widest uppercase" style={{ color: "#8FA599" }}>
-                {new Date(g.date).toLocaleDateString("es", { weekday: "short", month: "short", day: "numeric" })} · {new Date(g.date).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit", hour12: true })}
-              </span>
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: g.completed ? "#1A362A" : "#12281E", color: g.completed ? "#3FC97A" : "#8FA599" }}>
-                {g.status}
-              </span>
+        {data.games.map((g) => {
+          const home = standingsMap[g.homeCode];
+          const away = standingsMap[g.awayCode];
+          const homeWinProb = !g.completed ? computeNflWinProb(home, away) : null;
+          return (
+            <div key={g.id} className="p-4 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] tracking-widest uppercase" style={{ color: "#8FA599" }}>
+                  {new Date(g.date).toLocaleDateString("es", { weekday: "short", month: "short", day: "numeric" })} · {new Date(g.date).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit", hour12: true })}
+                </span>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: g.completed ? "#1A362A" : "#12281E", color: g.completed ? "#3FC97A" : "#8FA599" }}>
+                  {g.status}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm" style={{ color: g.completed && g.awayScore > g.homeScore ? "#FFB627" : "#EDEAE1" }}>{g.awayName}</span>
+                <div className="flex items-center gap-2">
+                  {homeWinProb != null && <span className="text-[11px] font-semibold tabular-nums" style={{ color: (1 - homeWinProb) >= homeWinProb ? "#FFB627" : "#8FA599", fontFamily: "ui-monospace, monospace" }}>{((1 - homeWinProb) * 100).toFixed(0)}%</span>}
+                  <span className="text-sm font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{g.awayScore ?? "—"}</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm" style={{ color: g.completed && g.homeScore > g.awayScore ? "#FFB627" : "#EDEAE1" }}>{g.homeName}</span>
+                <div className="flex items-center gap-2">
+                  {homeWinProb != null && <span className="text-[11px] font-semibold tabular-nums" style={{ color: homeWinProb >= (1 - homeWinProb) ? "#FFB627" : "#8FA599", fontFamily: "ui-monospace, monospace" }}>{(homeWinProb * 100).toFixed(0)}%</span>}
+                  <span className="text-sm font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{g.homeScore ?? "—"}</span>
+                </div>
+              </div>
+              {g.venue && <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>{g.venue}</div>}
             </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm" style={{ color: g.completed && g.awayScore > g.homeScore ? "#FFB627" : "#EDEAE1" }}>{g.awayName}</span>
-              <span className="text-sm font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{g.awayScore ?? "—"}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm" style={{ color: g.completed && g.homeScore > g.awayScore ? "#FFB627" : "#EDEAE1" }}>{g.homeName}</span>
-              <span className="text-sm font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{g.homeScore ?? "—"}</span>
-            </div>
-            {g.venue && <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>{g.venue}</div>}
-          </div>
-        ))}
+          );
+        })}
       </div>
+      <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
+        Probabilidad real: Log5 con récord de temporada + ventaja de casa (3.2%, el promedio real de los últimos 5 años, no el histórico viejo) + diferencial de puntos por juego. No incluye lesiones, clima, ni QB confirmado todavía — eso viene en la próxima fase.
+      </p>
     </div>
   );
 }
@@ -113,7 +171,7 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full" style={{ background: "#C8393E" }} />
             <span className="text-[11px] tracking-[0.25em] uppercase" style={{ color: "#8FA599", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
-              NFL Analytics — Fase 1
+              NFL Analytics — Fase 2
             </span>
             {onBackToMenu && (
               <button
@@ -159,7 +217,7 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
         {view === "juegos" ? <GamesWeek /> : <Standings />}
 
         <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
-          Fase 1: datos reales conectados (calendario, marcadores, tabla de posiciones). El modelo de predicción se construye en las próximas sesiones, igual que se hizo con MLB.
+          Fase 2: probabilidad real de ganar conectada (Log5 + ventaja de casa real + diferencial de puntos). Pendiente para próximas fases: lesiones, QB confirmado, clima real, y backtesting — igual que se hizo con MLB.
         </p>
       </div>
     </div>
