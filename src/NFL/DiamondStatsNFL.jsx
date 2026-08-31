@@ -37,6 +37,55 @@ function computeNflWinProb(home, away) {
   return Math.min(0.92, Math.max(0.08, prob));
 }
 
+// ---- Lesiones reales de un equipo, bajo demanda ----
+function TeamInjuries({ teamId, teamName }) {
+  const [open, setOpen] = useState(false);
+  const [injured, setInjured] = useState(null);
+  const [status, setStatus] = useState("idle"); // "idle" | "cargando" | "listo" | "error"
+
+  const toggle = () => {
+    if (!open && status === "idle") {
+      setStatus("cargando");
+      fetch(`${BACKEND_URL}/api/nfl/team/${teamId}/injuries`)
+        .then((r) => r.json())
+        .then((d) => { setInjured(d.injured || []); setStatus("listo"); })
+        .catch(() => setStatus("error"));
+    }
+    setOpen((v) => !v);
+  };
+
+  return (
+    <div className="mt-1">
+      <button
+        onClick={toggle}
+        className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+        style={{ background: "#0F251C", color: "#8FA599", border: "1px solid #1F3D30" }}
+      >
+        {open ? `Ocultar lesiones de ${teamName} ▲` : `Ver lesiones de ${teamName} ▾`}
+      </button>
+      {open && (
+        <div className="mt-1.5">
+          {status === "cargando" && <p className="text-[10px]" style={{ color: "#5A7368" }}>Consultando roster real…</p>}
+          {status === "error" && <p className="text-[10px]" style={{ color: "#5A7368" }}>No se pudo traer el roster ahora mismo.</p>}
+          {status === "listo" && injured.length === 0 && <p className="text-[10px]" style={{ color: "#5A7368" }}>Sin lesiones reportadas en el roster.</p>}
+          {status === "listo" && injured.length > 0 && (
+            <div className="space-y-1">
+              {injured.map((p, i) => (
+                <div key={i} className="flex items-center justify-between text-[10px] px-2 py-1 rounded" style={{ background: "#0F251C" }}>
+                  <span style={{ color: p.position === "QB" ? "#FFB627" : "#C9D6CD", fontWeight: p.position === "QB" ? 700 : 400 }}>
+                    {p.name} ({p.position})
+                  </span>
+                  <span style={{ color: "#8FA599" }}>{p.status}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- Semana de la semana de juegos ----
 function GamesWeek() {
   const [data, setData] = useState(null);
@@ -99,6 +148,12 @@ function GamesWeek() {
                 </div>
               </div>
               {g.venue && <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>{g.venue}</div>}
+              {!g.completed && (
+                <div className="flex gap-2 flex-wrap mt-2">
+                  {away?.id && <TeamInjuries teamId={away.id} teamName={g.awayName} />}
+                  {home?.id && <TeamInjuries teamId={home.id} teamName={g.homeName} />}
+                </div>
+              )}
             </div>
           );
         })}
