@@ -346,6 +346,43 @@ async function computeTodaysPicks() {
   return { topHitters, topTeams };
 }
 
+// Calcula el Over/Under real de un partido — park factor + clima, ERA de
+// ambos abridores, e historial real de carreras entre estos dos equipos
+// (cara a cara) — pasado por una distribución de Poisson. Se comparte
+// entre la pantalla visible y el guardado automático, para que nunca se
+// desincronicen (mismo principio que computeFullHomeWinProb).
+async function computeOverUnder(game) {
+  const recHome = TEAM_RECORDS[game.homeCode];
+  const recAway = TEAM_RECORDS[game.awayCode];
+  const stadium = STADIUMS[game.homeCode];
+  if (!recHome || !recAway || !stadium) return null;
+
+  const baseProb = log5(recHome.wpct, recAway.wpct);
+  const { effectiveRunFactor } = adjustedHomeProb({
+    baseProb, stadium, wind: "neutro", temp: "templado",
+    home: game.homeCode, away: game.awayCode,
+    homePitcher: game.homePitcher, awayPitcher: game.awayPitcher,
+  });
+
+  const homeEra = game.homePitcher?.era != null ? game.homePitcher.era : LEAGUE_AVG_ERA;
+  const awayEra = game.awayPitcher?.era != null ? game.awayPitcher.era : LEAGUE_AVG_ERA;
+  const pitcherFactor = ((homeEra + awayEra) / 2) / LEAGUE_AVG_ERA;
+
+  const headToHead = await fetch(`${BACKEND_URL}/api/matchup/${game.homeCode}/${game.awayCode}/headtohead`)
+    .then((r) => r.json())
+    .catch(() => null);
+
+  let h2hRunsFactor = 1;
+  if (headToHead && headToHead.gamesPlayed >= 3 && headToHead.overUnder?.avgTotalRuns != null) {
+    const ratio = headToHead.overUnder.avgTotalRuns / BASELINE_TOTAL_RUNS;
+    h2hRunsFactor = 1 + (ratio - 1) * 0.3;
+  }
+
+  const expectedRuns = BASELINE_TOTAL_RUNS * effectiveRunFactor * pitcherFactor * h2hRunsFactor;
+  const { line, overProb, underProb } = estimateOverUnder(expectedRuns);
+  return { line, overProb, underProb, expectedRuns };
+}
+
 function gameProbabilities(p, pitcher, todaysDayNight) {
   const perAb = matchupAdjustedProbs(p, pitcher, todaysDayNight);
   const abPerGame = p.ab / p.g;
@@ -737,6 +774,8 @@ function TodayGamesHeader() {
   const [headToHeadStatus, setHeadToHeadStatus] = useState("idle");
   const [computedWinProb, setComputedWinProb] = useState(null); // probabilidad real, calculada con la MISMA función que usa el guardado — para que la pantalla y lo guardado nunca se desincronicen
   const [winProbStatus, setWinProbStatus] = useState("idle");
+  const [computedOverUnder, setComputedOverUnder] = useState(null); // { line, overProb, underProb, expectedRuns } — misma idea, para Over/Under
+  const [overUnderStatus, setOverUnderStatus] = useState("idle");
   const [gameRest, setGameRest] = useState({}); // { [code]: { daysRested, lastGameDayNight, ... } }
   const [restStatus, setRestStatus] = useState("idle");
   const [hitStreaks, setHitStreaks] = useState({}); // { [playerId]: number de juegos consecutivos con hit }
@@ -766,6 +805,14 @@ function TodayGamesHeader() {
               body: JSON.stringify({ game_date: gameDate, home_code: g.homeCode, away_code: g.awayCode, home_win_prob: homeWinProb }),
             }).catch(() => {});
           });
+          computeOverUnder(g).then((ou) => {
+            if (ou == null) return;
+            fetch(`${BACKEND_URL}/api/overunder/save`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ game_date: gameDate, home_code: g.homeCode, away_code: g.awayCode, line: ou.line, over_prob: ou.overProb, expected_runs: ou.expectedRuns }),
+            }).catch(() => {});
+          });
         }
       })
       .catch(() => { if (!cancelled) setStatus("error"); });
@@ -790,6 +837,23 @@ function TodayGamesHeader() {
     computeFullHomeWinProb(game).then((prob) => {
       setComputedWinProb(prob);
       setWinProbStatus(prob != null ? "listo" : "error");
+    });
+
+    // Mismo principio para Over/Under, y se guarda automáticamente en
+    // cuanto se calcula (igual que la probabilidad de ganar).
+    setComputedOverUnder(null);
+    setOverUnderStatus("cargando");
+    computeOverUnder(game).then((ou) => {
+      setComputedOverUnder(ou);
+      setOverUnderStatus(ou != null ? "listo" : "error");
+      if (ou != null) {
+        const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+        fetch(`${BACKEND_URL}/api/overunder/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ game_date: gameDate, home_code: game.homeCode, away_code: game.awayCode, line: ou.line, over_prob: ou.overProb, expected_runs: ou.expectedRuns }),
+        }).catch(() => {});
+      }
     });
 
     const pitcherFor = (p) => (p && p.name !== "Por confirmar" ? { hand: p.hand, era: p.era != null ? p.era : LEAGUE_AVG_ERA } : null);
@@ -1010,38 +1074,6 @@ function TodayGamesHeader() {
             const homeWinProb = computedWinProb;
             const awayWinProb = 1 - homeWinProb;
 
-            // effectiveRunFactor solo hace falta para el Over/Under de
-            // abajo — se recalcula aquí de forma liviana (sin bullpen ni
-            // los demás ajustes, que no afectan al park factor).
-            const baseProb = log5(recHome.wpct, recAway.wpct);
-            const { effectiveRunFactor } = adjustedHomeProb({
-              baseProb, stadium, wind: "neutro", temp: "templado",
-              home: selectedGame.homeCode, away: selectedGame.awayCode,
-              homePitcher: selectedGame.homePitcher, awayPitcher: selectedGame.awayPitcher,
-            });
-
-            // Over/Under real: combina el park factor (+ clima, ya incluido
-            // en effectiveRunFactor) con el ERA de AMBOS abridores de este
-            // juego específico, y lo pasa por una distribución de Poisson
-            // para sacar una probabilidad genuina, no solo una etiqueta.
-            const homeEra = selectedGame.homePitcher.era != null ? selectedGame.homePitcher.era : LEAGUE_AVG_ERA;
-            const awayEra = selectedGame.awayPitcher.era != null ? selectedGame.awayPitcher.era : LEAGUE_AVG_ERA;
-            const pitcherFactor = ((homeEra + awayEra) / 2) / LEAGUE_AVG_ERA;
-
-            // Ajuste real: si estos dos equipos específicos han anotado
-            // más (o menos) carreras entre ellos de lo normal esta
-            // temporada, eso empuja el número — con peso moderado (30%)
-            // para no sobre-reaccionar, y solo con 3+ juegos de muestra.
-            let h2hRunsFactor = 1;
-            if (headToHead && headToHead.gamesPlayed >= 3 && headToHead.overUnder?.avgTotalRuns != null) {
-              const ratio = headToHead.overUnder.avgTotalRuns / BASELINE_TOTAL_RUNS;
-              h2hRunsFactor = 1 + (ratio - 1) * 0.3;
-            }
-
-            const expectedRuns = BASELINE_TOTAL_RUNS * effectiveRunFactor * pitcherFactor * h2hRunsFactor;
-            const { line, overProb, underProb } = estimateOverUnder(expectedRuns);
-            const bothErasConfirmed = selectedGame.homePitcher.era != null && selectedGame.awayPitcher.era != null;
-
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
                 <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara + descanso)</div>
@@ -1067,22 +1099,31 @@ function TodayGamesHeader() {
                 </div>
 
                 <div className="pt-3" style={{ borderTop: "1px dashed #2A4D3B" }}>
-                  <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-                    Over/Under estimado · línea {line.toFixed(1)} carreras
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overProb >= underProb ? "#1A362A" : "#0F251C" }}>
-                      <span style={{ color: overProb >= underProb ? "#FFB627" : "#C9D6CD" }}>Over {line.toFixed(1)}</span>
-                      <span className="font-bold tabular-nums" style={{ color: overProb >= underProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overProb * 100).toFixed(1)}%</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: underProb > overProb ? "#1A362A" : "#0F251C" }}>
-                      <span style={{ color: underProb > overProb ? "#FFB627" : "#C9D6CD" }}>Under {line.toFixed(1)}</span>
-                      <span className="font-bold tabular-nums" style={{ color: underProb > overProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(underProb * 100).toFixed(1)}%</span>
-                    </div>
-                  </div>
-                  <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-                    Carreras totales esperadas: {expectedRuns.toFixed(1)} — combina el promedio real de MLB esta temporada ({BASELINE_TOTAL_RUNS}, calculado de los 30 equipos), el park factor de {stadium.park}, el ERA de ambos abridores{bothErasConfirmed ? "" : " (uno o ambos sin ERA confirmado hoy, se usó el promedio de liga como neutral)"}{h2hRunsFactor !== 1 ? ", y su historial real de carreras entre ellos esta temporada" : ""}, pasado por una distribución de Poisson. Es un modelo estadístico real, no una garantía — no incluye lineup del día ni clima minuto a minuto.
-                  </p>
+                  {overUnderStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando Over/Under real…</p>}
+                  {overUnderStatus === "listo" && computedOverUnder && (() => {
+                    const { line, overProb, underProb, expectedRuns } = computedOverUnder;
+                    const bothErasConfirmed = selectedGame.homePitcher.era != null && selectedGame.awayPitcher.era != null;
+                    return (
+                      <>
+                        <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+                          Over/Under estimado · línea {line.toFixed(1)} carreras
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overProb >= underProb ? "#1A362A" : "#0F251C" }}>
+                            <span style={{ color: overProb >= underProb ? "#FFB627" : "#C9D6CD" }}>Over {line.toFixed(1)}</span>
+                            <span className="font-bold tabular-nums" style={{ color: overProb >= underProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overProb * 100).toFixed(1)}%</span>
+                          </div>
+                          <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: underProb > overProb ? "#1A362A" : "#0F251C" }}>
+                            <span style={{ color: underProb > overProb ? "#FFB627" : "#C9D6CD" }}>Under {line.toFixed(1)}</span>
+                            <span className="font-bold tabular-nums" style={{ color: underProb > overProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(underProb * 100).toFixed(1)}%</span>
+                          </div>
+                        </div>
+                        <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
+                          Carreras totales esperadas: {expectedRuns.toFixed(1)} — combina el promedio real de MLB esta temporada ({BASELINE_TOTAL_RUNS}, calculado de los 30 equipos), el park factor de {stadium.park}, el ERA de ambos abridores{bothErasConfirmed ? "" : " (uno o ambos sin ERA confirmado hoy, se usó el promedio de liga como neutral)"}, y su historial real de carreras entre ellos esta temporada cuando hay muestra suficiente, pasado por una distribución de Poisson. Es un modelo estadístico real, no una garantía — no incluye lineup del día ni clima minuto a minuto.
+                        </p>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
             );
@@ -1589,7 +1630,118 @@ function AccuracyView() {
       </p>
     </div>
 
+    <OverUnderAccuracyView onlyRecent={onlyRecent} calibrationFixDate={CALIBRATION_FIX_DATE} />
     <PicksAccuracyView picksData={picksData} picksStatus={picksStatus} checkingPicks={checkingPicks} checkPicksNow={checkPicksNow} />
+    </div>
+  );
+}
+
+function OverUnderAccuracyView({ onlyRecent, calibrationFixDate }) {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    const sinceParam = onlyRecent ? `?since=${calibrationFixDate}` : "";
+    fetch(`${BACKEND_URL}/api/overunder/accuracy${sinceParam}`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+
+  useEffect(() => { load(); }, [onlyRecent]);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/overunder/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  return (
+    <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>
+        Backtesting real — Over/Under
+      </div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
+        ¿Qué tan certero es el Over/Under?
+      </h2>
+
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar Over/Under de días anteriores"}
+      </button>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && data && data.totalChecked === 0 && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          Todavía no hay Over/Under comparados contra resultados reales. La app guarda una predicción real cada vez que visitas un partido en Juegos de hoy — vuelve en unos días y presiona "Revisar Over/Under de días anteriores".
+        </p>
+      )}
+
+      {status === "listo" && data && data.totalChecked > 0 && (
+        <>
+          <div className="p-3.5 rounded-lg border text-center mb-4" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+              {(data.accuracy * 100).toFixed(1)}%
+            </div>
+            <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Acertó Over/Under ({data.totalChecked} decisivos)</div>
+          </div>
+
+          {data.calibration && data.calibration.some((c) => c.count > 0) && (
+            <>
+              <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Calibración real por rango de confianza</div>
+              <div className="space-y-1.5 mb-2">
+                {data.calibration.filter((c) => c.count > 0).map((c) => {
+                  const diff = c.actualRate - c.predictedAvg;
+                  const diffPct = (diff * 100).toFixed(1);
+                  return (
+                    <div key={c.label} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                      <span style={{ color: "#EDEAE1" }}>{c.label} <span style={{ color: "#8FA599" }}>({c.count} casos)</span></span>
+                      <span style={{ color: "#8FA599" }}>Dio {(c.predictedAvg * 100).toFixed(1)}% en promedio</span>
+                      <span style={{ color: "#C9D6CD" }}>Acertó {(c.actualRate * 100).toFixed(1)}% real</span>
+                      <span style={{ color: Math.abs(diff) < 0.08 ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>
+                        {Math.abs(diff) < 0.08 ? "✓ bien calibrado" : diff < 0 ? `Sobreconfiado (${diffPct}pp)` : `Subconfiado (+${diffPct}pp)`}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+
+          <div className="text-[10px] tracking-widest uppercase mb-2 mt-4" style={{ color: "#8FA599" }}>Últimas comparaciones</div>
+          <div className="space-y-1.5">
+            {data.recent.map((r, i) => {
+              const predictedSide = r.overProb >= 0.5 ? "Over" : "Under";
+              const isPush = r.actualResult === "push";
+              const correct = !isPush && r.actualResult === predictedSide.toLowerCase();
+              return (
+                <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                  <span style={{ color: "#C9D6CD" }}>{r.date} · {r.away} @ {r.home}</span>
+                  <span style={{ color: "#8FA599" }}>Línea {r.line} · Dio {predictedSide}</span>
+                  <span style={{ color: "#C9D6CD" }}>{r.actualTotalRuns} carreras reales</span>
+                  <span style={{ color: isPush ? "#8FA599" : correct ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>
+                    {isPush ? "Push" : correct ? "✓ acertó" : "✗ falló"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      <p className="text-[10px] mt-4 leading-relaxed" style={{ color: "#5A7368" }}>
+        "Push" significa que el marcador cayó exactamente en la línea — no cuenta como acierto ni fallo, es un empate técnico. El resto compara si de verdad pasó Over o Under contra lo que predijo el modelo.
+      </p>
     </div>
   );
 }
