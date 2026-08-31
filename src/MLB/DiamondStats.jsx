@@ -917,7 +917,7 @@ function TodayGamesHeader() {
     const stadium = STADIUMS[game.homeCode];
     if (stadium && !stadium.roofed) {
       setWeatherStatus("cargando");
-      fetch(`${BACKEND_URL}/api/weather/${game.homeCode}`)
+      fetch(`${BACKEND_URL}/api/weather/${game.homeCode}?gameTime=${encodeURIComponent(game.time)}`)
         .then((r) => r.json())
         .then((data) => {
           if (data.error) { setWeatherStatus("error"); return; }
@@ -1153,22 +1153,29 @@ function TodayGamesHeader() {
           {/* Clima real del estadio */}
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Clima real del estadio</div>
-            {weatherStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando clima real…</p>}
+            {weatherStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Consultando pronóstico para la hora del juego…</p>}
             {weatherStatus === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo traer el clima real ahora mismo.</p>}
             {weatherStatus === "listo" && gameWeather && (
-              <div className="flex items-center gap-3 flex-wrap">
-                <span style={{ fontSize: "24px" }}>{gameWeather.icon}</span>
-                <div>
-                  <div className="text-base font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{gameWeather.tempF.toFixed(1)}°F</div>
-                  <div className="text-[10px]" style={{ color: "#8FA599" }}>{gameWeather.description}</div>
+              <>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <span style={{ fontSize: "24px" }}>{gameWeather.icon}</span>
+                  <div>
+                    <div className="text-base font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{gameWeather.tempF.toFixed(1)}°F</div>
+                    <div className="text-[10px]" style={{ color: "#8FA599" }}>{gameWeather.description}</div>
+                  </div>
+                  <div className="text-[11px]" style={{ color: "#8FA599" }}>
+                    Humedad: <b style={{ color: "#C9D6CD" }}>{gameWeather.humidity}%</b> · Viento: <b style={{ color: "#C9D6CD" }}>{gameWeather.windMph.toFixed(1)} mph {gameWeather.windDir}</b> · P.O.P: <b style={{ color: "#C9D6CD" }}>{gameWeather.pop}%</b>
+                  </div>
+                  <div className="ml-auto">
+                    <WindFieldIcon deg={gameWeather.windDirDeg} mph={gameWeather.windMph} orientationDeg={HOME_PLATE_ORIENTATION[selectedGame.homeCode]} />
+                  </div>
                 </div>
-                <div className="text-[11px]" style={{ color: "#8FA599" }}>
-                  Humedad: <b style={{ color: "#C9D6CD" }}>{gameWeather.humidity}%</b> · Viento: <b style={{ color: "#C9D6CD" }}>{gameWeather.windMph.toFixed(1)} mph {gameWeather.windDir}</b> · P.O.P: <b style={{ color: "#C9D6CD" }}>{gameWeather.pop}%</b>
-                </div>
-                <div className="ml-auto">
-                  <WindFieldIcon deg={gameWeather.windDirDeg} mph={gameWeather.windMph} orientationDeg={HOME_PLATE_ORIENTATION[selectedGame.homeCode]} />
-                </div>
-              </div>
+                {gameWeather.forecastFor && (
+                  <p className="text-[10px] mt-2" style={{ color: "#5A7368" }}>
+                    Pronóstico real para las {new Date(gameWeather.forecastFor).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit", hour12: true })} — la hora más cercana al primer lanzamiento, no el clima de ahora mismo.
+                  </p>
+                )}
+              </>
             )}
             {weatherStatus === "idle" && stadium.roofed && (
               <p className="text-[11px]" style={{ color: "#5A7368" }}>Estadio con techo cerrado ({stadium.park}) — el clima no afecta este juego, por eso no se consulta.</p>
