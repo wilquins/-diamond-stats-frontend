@@ -268,28 +268,46 @@ async function computeTodaysPicks() {
         .catch(() => [])
     )
   );
-  const allHitters = hitterResults.flat().filter((h) => h.ab > 0 && h.g > 0 && teamsPlayingToday.has(h.team));
+  const allHitters = hitterResults.flat().filter((h) => h.ab >= 20 && teamsPlayingToday.has(h.team));
+
+  // Ahora sí toma en cuenta al pitcher rival REAL de cada bateador hoy
+  // (mano + ERA), y si el juego es de día o de noche — igual que hace
+  // "Juegos de hoy". Antes solo miraba su promedio de temporada sin
+  // importar contra quién jugaba, por eso los mismos nombres se repetían
+  // días seguidos sin variar según el rival de cada día.
+  const pitcherFor = (p) => (p && p.name !== "Por confirmar" ? { hand: p.hand, era: p.era != null ? p.era : LEAGUE_AVG_ERA } : null);
   const seasonRanked = allHitters
-    .map((p) => ({ player: p, seasonProb: toGameProbability(hitProbabilities(p).hit, p.ab / p.g) }))
+    .map((p) => {
+      const g = gameByCode[p.team];
+      let opposingPitcher = null;
+      let dayNight = null;
+      if (g) {
+        dayNight = g.dayNight;
+        opposingPitcher = p.team === g.homeCode ? pitcherFor(g.awayPitcher) : pitcherFor(g.homePitcher);
+      }
+      const gp = gameProbabilities(p, opposingPitcher, dayNight);
+      return { player: p, seasonProb: gp.hit, opposingPitcher, dayNight };
+    })
     .sort((a, b) => b.seasonProb - a.seasonProb)
     .slice(0, 15);
 
   const withRecentForm = await Promise.all(
-    seasonRanked.map(({ player, seasonProb }) =>
+    seasonRanked.map(({ player, seasonProb, opposingPitcher, dayNight }) =>
       player.id
         ? fetch(`${BACKEND_URL}/api/player/${player.id}/streak`)
             .then((r) => r.json())
-            .then((data) => ({ player, seasonProb, recentAvg: data.recentAvg, recentGames: data.recentGames }))
-            .catch(() => ({ player, seasonProb, recentAvg: null, recentGames: 0 }))
-        : Promise.resolve({ player, seasonProb, recentAvg: null, recentGames: 0 })
+            .then((data) => ({ player, seasonProb, recentAvg: data.recentAvg, recentGames: data.recentGames, opposingPitcher, dayNight }))
+            .catch(() => ({ player, seasonProb, recentAvg: null, recentGames: 0, opposingPitcher, dayNight }))
+        : Promise.resolve({ player, seasonProb, recentAvg: null, recentGames: 0, opposingPitcher, dayNight })
     )
   );
   // Mezcla real: con 5+ juegos recientes de muestra, su forma actual pesa
-  // mitad y mitad contra su promedio de toda la temporada.
+  // mitad y mitad contra su probabilidad de temporada YA ajustada por el
+  // pitcher rival real de hoy.
   const topHitters = withRecentForm
-    .map(({ player, seasonProb, recentAvg, recentGames }) => {
+    .map(({ player, seasonProb, recentAvg, recentGames, opposingPitcher, dayNight }) => {
       if (recentAvg == null || recentGames < 5) return { player, prob: seasonProb };
-      const seasonPerAb = hitProbabilities(player).hit / 100;
+      const seasonPerAb = matchupAdjustedProbs(player, opposingPitcher, dayNight).hit / 100;
       const blendedPerAb = seasonPerAb * 0.5 + recentAvg * 0.5;
       return { player, prob: toGameProbability(blendedPerAb * 100, player.ab / player.g) };
     })
@@ -783,10 +801,10 @@ function TodayGamesHeader() {
     ])
       .then(([homeData, awayData, lineupData]) => {
         let homeBatters = (homeData.hitters || [])
-          .filter((h) => h.ab > 0 && h.g > 0)
+          .filter((h) => h.ab >= 20)
           .map((h) => ({ ...h, team: game.homeCode, pitcher: pitcherFor(game.awayPitcher) }));
         let awayBatters = (awayData.hitters || [])
-          .filter((h) => h.ab > 0 && h.g > 0)
+          .filter((h) => h.ab >= 20)
           .map((h) => ({ ...h, team: game.awayCode, pitcher: pitcherFor(game.homePitcher) }));
 
         // Si la alineación real de hoy ya está publicada, filtramos a SOLO
