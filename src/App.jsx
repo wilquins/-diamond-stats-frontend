@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import DiamondStats from "./MLB/DiamondStats.jsx";
+import DiamondStatsNFL from "./NFL/DiamondStatsNFL.jsx";
 
 // ---- Íconos propios por deporte — mismo estilo de línea que ya usa MLB
 // (dorado, minimalista), en vez de emojis genéricos. ----
@@ -47,14 +48,14 @@ function HockeyIcon({ active }) {
 
 const SPORTS = [
   { id: "mlb", name: "MLB", Icon: BaseballIcon, ready: true, tagline: "Béisbol", stats: ["30 equipos en vivo", "Predicciones reales", "Backtesting real"] },
+  { id: "nfl", name: "NFL", Icon: FootballIcon, ready: true, tagline: "Fútbol americano", stats: ["Calendario real", "Tabla de posiciones", "Fase 1"] },
   { id: "nba", name: "NBA", Icon: BasketballIcon, ready: false, tagline: "Básquetbol" },
-  { id: "nfl", name: "NFL", Icon: FootballIcon, ready: false, tagline: "Fútbol americano" },
   { id: "nhl", name: "NHL", Icon: HockeyIcon, ready: false, tagline: "Hockey" },
 ];
 
 function SportLanding({ onSelect }) {
-  const mlb = SPORTS[0];
-  const upcoming = SPORTS.slice(1);
+  const readySports = SPORTS.filter((s) => s.ready);
+  const upcoming = SPORTS.filter((s) => !s.ready);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6" style={{ background: "#0B1F17" }}>
@@ -73,51 +74,58 @@ function SportLanding({ onSelect }) {
           <div className="mt-4 h-px w-full" style={{ background: "repeating-linear-gradient(90deg, #C8393E 0 10px, transparent 10px 20px)" }} />
         </div>
 
-        {/* MLB — el único activo, tarjeta grande y viva */}
-        <button
-          onClick={() => onSelect(mlb.id)}
-          className="w-full p-6 rounded-2xl border text-left transition-transform hover:scale-[1.01] mb-4"
-          style={{ background: "#12281E", borderColor: "#FFB627" }}
-        >
-          <div className="flex items-center justify-between flex-wrap gap-3">
-            <div className="flex items-center gap-4">
-              <mlb.Icon active />
-              <div>
-                <div className="flex items-center gap-2">
-                  <div className="text-xl font-bold" style={{ color: "#EDEAE1" }}>{mlb.name}</div>
-                  <div className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{ background: "#1A362A" }}>
-                    <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#3FC97A" }} />
-                    <span className="text-[9px] font-semibold tracking-widest uppercase" style={{ color: "#3FC97A" }}>En vivo</span>
+        {/* Deportes activos — tarjetas grandes y vivas */}
+        {readySports.map((sport) => (
+          <button
+            key={sport.id}
+            onClick={() => onSelect(sport.id)}
+            className="w-full p-6 rounded-2xl border text-left transition-transform hover:scale-[1.01] mb-4"
+            style={{ background: "#12281E", borderColor: "#FFB627" }}
+          >
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-4">
+                <sport.Icon active />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-xl font-bold" style={{ color: "#EDEAE1" }}>{sport.name}</div>
+                    <div className="flex items-center gap-1 px-2 py-0.5 rounded-full" style={{ background: "#1A362A" }}>
+                      <div className="w-1.5 h-1.5 rounded-full" style={{ background: "#3FC97A" }} />
+                      <span className="text-[9px] font-semibold tracking-widest uppercase" style={{ color: "#3FC97A" }}>En vivo</span>
+                    </div>
                   </div>
+                  <div className="text-xs mt-0.5" style={{ color: "#8FA599" }}>{sport.tagline}</div>
                 </div>
-                <div className="text-xs mt-0.5" style={{ color: "#8FA599" }}>{mlb.tagline}</div>
               </div>
+              <div className="text-2xl" style={{ color: "#FFB627" }}>→</div>
             </div>
-            <div className="text-2xl" style={{ color: "#FFB627" }}>→</div>
-          </div>
-          <div className="flex gap-2 mt-4 flex-wrap">
-            {mlb.stats.map((s) => (
-              <span key={s} className="text-[10px] font-semibold px-2 py-1 rounded-full" style={{ background: "#0F251C", color: "#8FA599", fontFamily: "ui-monospace, monospace" }}>
-                {s}
-              </span>
+            {sport.stats && (
+              <div className="flex gap-2 mt-4 flex-wrap">
+                {sport.stats.map((s) => (
+                  <span key={s} className="text-[10px] font-semibold px-2 py-1 rounded-full" style={{ background: "#0F251C", color: "#8FA599", fontFamily: "ui-monospace, monospace" }}>
+                    {s}
+                  </span>
+                ))}
+              </div>
+            )}
+          </button>
+        ))}
+
+        {/* Los demás — reservados, mismo estilo pero apagados */}
+        {upcoming.length > 0 && (
+          <div className="grid gap-3 mt-2" style={{ gridTemplateColumns: `repeat(${upcoming.length}, minmax(0, 1fr))` }}>
+            {upcoming.map((sport) => (
+              <div
+                key={sport.id}
+                className="p-4 rounded-xl border text-center"
+                style={{ background: "#12281E", borderColor: "#1F3D30", opacity: 0.55 }}
+              >
+                <div className="flex justify-center"><sport.Icon /></div>
+                <div className="text-sm font-bold mt-2" style={{ color: "#EDEAE1" }}>{sport.name}</div>
+                <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>Próximamente</div>
+              </div>
             ))}
           </div>
-        </button>
-
-        {/* Los otros 3 — reservados, mismo estilo pero apagados */}
-        <div className="grid grid-cols-3 gap-3">
-          {upcoming.map((sport) => (
-            <div
-              key={sport.id}
-              className="p-4 rounded-xl border text-center"
-              style={{ background: "#12281E", borderColor: "#1F3D30", opacity: 0.55 }}
-            >
-              <div className="flex justify-center"><sport.Icon /></div>
-              <div className="text-sm font-bold mt-2" style={{ color: "#EDEAE1" }}>{sport.name}</div>
-              <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>Próximamente</div>
-            </div>
-          ))}
-        </div>
+        )}
       </div>
     </div>
   );
@@ -127,11 +135,12 @@ export default function App() {
   const [sport, setSport] = useState(null);
 
   if (sport === "mlb") return <DiamondStats onBackToMenu={() => setSport(null)} />;
+  if (sport === "nfl") return <DiamondStatsNFL onBackToMenu={() => setSport(null)} />;
 
-  // nba/nfl/nhl no son seleccionables todavía (botón deshabilitado en
+  // nba/nhl no son seleccionables todavía (botón deshabilitado en
   // SportLanding), así que si algún día se activan sin tener su
   // componente listo, esto evita una pantalla en blanco.
-  if (sport === "nba" || sport === "nfl" || sport === "nhl") {
+  if (sport === "nba" || sport === "nhl") {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: "#0B1F17", color: "#8FA599" }}>
         Próximamente — vuelve pronto.
