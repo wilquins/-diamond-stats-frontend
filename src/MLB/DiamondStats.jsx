@@ -216,6 +216,26 @@ async function computeFullHomeWinProb(game) {
     h2hAdj = (h2hHomePct - 0.5) * 0.4;
   }
 
+  // Ajuste real: cómo le ha ido específicamente al abridor de HOY contra
+  // este equipo rival exacto, esta temporada — un pitcher puede tener
+  // buen ERA general pero le ha pateado bien (o mal) un equipo en
+  // particular. Solo se activa con 2+ enfrentamientos previos reales.
+  let pitcherHistoryAdj = 0;
+  if (h2h?.games?.length > 0) {
+    const homeStarts = h2h.games.filter((g) => g.homeStarter && g.homeStarter === game.homePitcher?.name);
+    const awayStarts = h2h.games.filter((g) => g.awayStarter && g.awayStarter === game.awayPitcher?.name);
+    let homePersonalDelta = 0, awayPersonalDelta = 0;
+    if (homeStarts.length >= 2) {
+      const wins = homeStarts.filter((g) => g.homeScore > g.awayScore).length;
+      homePersonalDelta = (wins / homeStarts.length - 0.5) * 0.3;
+    }
+    if (awayStarts.length >= 2) {
+      const wins = awayStarts.filter((g) => g.awayScore > g.homeScore).length;
+      awayPersonalDelta = (wins / awayStarts.length - 0.5) * 0.3;
+    }
+    pitcherHistoryAdj = homePersonalDelta - awayPersonalDelta;
+  }
+
   const fatiguePenalty = (rest) => {
     if (!rest || rest.daysRested == null) return 0;
     let penalty = 0;
@@ -225,7 +245,7 @@ async function computeFullHomeWinProb(game) {
   };
   const fatigueAdj = fatiguePenalty(homeRest) - fatiguePenalty(awayRest);
 
-  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + fatigueAdj));
+  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj));
 
   // ---- Corrección de calibración real ----
   // Con 143 predicciones reales comparadas en Precisión, se encontró que
@@ -770,7 +790,8 @@ function TodayGamesHeader() {
   const [bullpenStatus, setBullpenStatus] = useState("idle");
   const [gameSituational, setGameSituational] = useState({}); // { [code]: {...} }
   const [situationalStatus, setSituationalStatus] = useState("idle");
-  const [headToHead, setHeadToHead] = useState(null); // { gamesPlayed, homeTeamWins, awayTeamWins }
+  const [headToHead, setHeadToHead] = useState(null); // { gamesPlayed, homeTeamWins, awayTeamWins, games }
+  const [showH2hGames, setShowH2hGames] = useState(false);
   const [headToHeadStatus, setHeadToHeadStatus] = useState("idle");
   const [computedWinProb, setComputedWinProb] = useState(null); // probabilidad real, calculada con la MISMA función que usa el guardado — para que la pantalla y lo guardado nunca se desincronicen
   const [winProbStatus, setWinProbStatus] = useState("idle");
@@ -1076,7 +1097,7 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara + descanso)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara + historial del abridor + descanso)</div>
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -1227,6 +1248,36 @@ function TodayGamesHeader() {
                     Over/Under real (línea {headToHead.overUnder.referenceLine}): <b style={{ color: "#FFB627" }}>{headToHead.overUnder.overCount} Over</b> — <b style={{ color: "#FFB627" }}>{headToHead.overUnder.underCount} Under</b>
                     {headToHead.overUnder.avgTotalRuns != null && <span> · promedio real de {headToHead.overUnder.avgTotalRuns} carreras combinadas entre ellos</span>}
                   </div>
+                )}
+                {headToHead.games?.length > 0 && (
+                  <>
+                    <button
+                      onClick={() => setShowH2hGames((v) => !v)}
+                      className="text-[10px] font-semibold px-2 py-1 rounded-full mt-2"
+                      style={{ background: "#0F251C", color: "#FFB627", border: "1px solid #2A4D3B" }}
+                    >
+                      {showH2hGames ? "Ocultar juegos anteriores ▲" : "Ver juegos anteriores entre ellos ▾"}
+                    </button>
+                    {showH2hGames && (
+                      <ol className="mt-2 space-y-1">
+                        {headToHead.games.map((g, i) => {
+                          const isTodayHomeStarter = g.homeStarter && g.homeStarter === selectedGame.homePitcher?.name;
+                          const isTodayAwayStarter = g.awayStarter && g.awayStarter === selectedGame.awayPitcher?.name;
+                          return (
+                            <li key={i} className="text-[11px] p-2 rounded" style={{ background: "#0F251C" }}>
+                              <div style={{ color: "#8FA599" }}>{g.date}</div>
+                              <div style={{ color: "#C9D6CD" }}>
+                                {g.awayCode} <b style={{ color: "#EDEAE1" }}>{g.awayScore}</b> — <b style={{ color: "#EDEAE1" }}>{g.homeScore}</b> {g.homeCode}
+                              </div>
+                              <div style={{ color: "#8FA599" }}>
+                                Abridores: {g.awayStarter || "?"}{isTodayAwayStarter && <span style={{ color: "#3FC97A" }}> (abre hoy)</span>} vs. {g.homeStarter || "?"}{isTodayHomeStarter && <span style={{ color: "#3FC97A" }}> (abre hoy)</span>}
+                              </div>
+                            </li>
+                          );
+                        })}
+                      </ol>
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -1466,7 +1517,7 @@ function DailyPicks() {
           </div>
         )}
         <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-          Usa el mismo modelo completo de 9 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara + descanso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
+          Usa el mismo modelo completo de 9 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara + historial del abridor + descanso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
         </p>
       </div>
     </div>
