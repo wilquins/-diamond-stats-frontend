@@ -275,7 +275,7 @@ async function computeTodaysPicks() {
     if (g.homeCode) { teamsPlayingToday.add(g.homeCode); gameByCode[g.homeCode] = g; }
     if (g.awayCode) { teamsPlayingToday.add(g.awayCode); gameByCode[g.awayCode] = g; }
   }
-  if (teamsPlayingToday.size === 0) return { topHitters: [], topTeams: [] };
+  if (teamsPlayingToday.size === 0) return { topHitters: [], topSingles: [], topTeams: [] };
 
   // Bateadores: top 15 amplio por promedio de temporada, luego mezclado
   // con su forma reciente real (últimos 10 juegos) para esos 15 nada más
@@ -334,6 +334,25 @@ async function computeTodaysPicks() {
     .sort((a, b) => b.prob - a.prob)
     .slice(0, 3);
 
+  // Sencillos: mismo principio de temporada ajustada por el pitcher rival
+  // de hoy — sin mezclar con "forma reciente" porque esa solo existe para
+  // hit en general (cualquier tipo), no específica de sencillos, y
+  // mezclarla igual sería impreciso.
+  const topSingles = allHitters
+    .map((p) => {
+      const g = gameByCode[p.team];
+      let opposingPitcher = null;
+      let dayNight = null;
+      if (g) {
+        dayNight = g.dayNight;
+        opposingPitcher = p.team === g.homeCode ? pitcherFor(g.awayPitcher) : pitcherFor(g.homePitcher);
+      }
+      const gp = gameProbabilities(p, opposingPitcher, dayNight);
+      return { player: p, prob: gp.single };
+    })
+    .sort((a, b) => b.prob - a.prob)
+    .slice(0, 3);
+
   // Equipos: un juego único por enfrentamiento real de hoy, con el modelo
   // completo de 9 factores — se elige el lado (local o visitante) que
   // tenga más probabilidad real de ganar.
@@ -363,7 +382,7 @@ async function computeTodaysPicks() {
   }
   const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
 
-  return { topHitters, topTeams };
+  return { topHitters, topSingles, topTeams };
 }
 
 // Calcula el Over/Under real de un partido — park factor + clima, ERA de
@@ -1549,7 +1568,7 @@ function TodayGamesHeader() {
 }
 
 function DailyPicks() {
-  const [picks, setPicks] = useState({ topHitters: [], topTeams: [] });
+  const [picks, setPicks] = useState({ topHitters: [], topSingles: [], topTeams: [] });
   const [loadStatus, setLoadStatus] = useState("cargando"); // "cargando" | "listo" | "error"
 
   // Usa la MISMA función compartida que el guardado automático — así
@@ -1558,16 +1577,16 @@ function DailyPicks() {
   useEffect(() => {
     let cancelled = false;
     computeTodaysPicks()
-      .then(({ topHitters, topTeams }) => {
+      .then(({ topHitters, topSingles, topTeams }) => {
         if (cancelled) return;
-        setPicks({ topHitters, topTeams });
+        setPicks({ topHitters, topSingles, topTeams });
         setLoadStatus("listo");
       })
       .catch(() => { if (!cancelled) setLoadStatus("error"); });
     return () => { cancelled = true; };
   }, []);
 
-  const { topHitters, topTeams } = picks;
+  const { topHitters, topSingles, topTeams } = picks;
 
   return (
     <div className="space-y-6">
@@ -1603,7 +1622,43 @@ function DailyPicks() {
           </div>
         )}
         <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
-          Combina su promedio de toda la temporada con su forma REAL de los últimos 10 juegos (mitad y mitad, cuando hay muestra suficiente) — un jugador frío de verdad baja, uno caliente de verdad sube. Solo entre jugadores cuyo equipo tiene partido real hoy. No ajustada por el pitcher rival específico.
+          Combina su promedio de toda la temporada — ya ajustado por el pitcher rival real de hoy — con su forma REAL de los últimos 10 juegos (mitad y mitad, cuando hay muestra suficiente). Solo entre jugadores cuyo equipo tiene partido real hoy.
+        </p>
+      </div>
+
+      <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+        <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>
+          Picks del día · bateadores
+        </div>
+        <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
+          Mayor probabilidad de sencillo hoy
+        </h2>
+        {loadStatus === "cargando" && (
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con datos reales de los 30 equipos…</p>
+        )}
+        {loadStatus === "error" && (
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend en vivo ahora mismo.</p>
+        )}
+        {loadStatus === "listo" && (
+          <div className="space-y-3">
+            {topSingles.map(({ player, prob }, i) => (
+              <div key={player.name + player.team} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
+                <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                  {i + 1}
+                </div>
+                <div className="flex-1">
+                  <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{player.name}</div>
+                  <div className="text-[11px]" style={{ color: "#8FA599" }}>{player.team} · {player.pos} · {player.avg.toFixed(3)} AVG</div>
+                </div>
+                <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                  {prob.toFixed(1)}%
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
+          Probabilidad de temporada, ya ajustada por el pitcher rival real de hoy. No mezclado con forma reciente — esa solo existe medida para hit en general, no específica de sencillos, y mezclarla igual sería impreciso.
         </p>
       </div>
 
