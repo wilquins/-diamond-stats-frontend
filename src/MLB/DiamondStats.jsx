@@ -791,15 +791,23 @@ function HitSplitsBreakdown({ splits, opposingTeamCode, isHome, statType = "hit"
   if (data.recent && data.recent.total > 0) {
     rows.push({ label: `${label} en los últimos ${data.recent.total} juegos`, value: `${data.recent.count}/${data.recent.total}`, pct: data.recent.pct });
   }
-  if (data.vsTeam && data.vsTeam.total > 0) {
-    rows.push({ label: `${label} en ${data.vsTeam.total} juegos vs ${opposingTeamCode}`, value: `${data.vsTeam.count}/${data.vsTeam.total}`, pct: data.vsTeam.pct });
+  if (data.vsTeam) {
+    rows.push(
+      data.vsTeam.total > 0
+        ? { label: `${label} en ${data.vsTeam.total} juegos vs ${opposingTeamCode}`, value: `${data.vsTeam.count}/${data.vsTeam.total}`, pct: data.vsTeam.pct }
+        : { label: `vs ${opposingTeamCode} esta temporada`, value: "sin enfrentamientos aún", pct: null }
+    );
   }
   const relevantSplit = isHome ? data.home : data.away;
   if (relevantSplit && relevantSplit.total > 0) {
     rows.push({ label: `${label} en ${relevantSplit.total} juegos de ${isHome ? "casa" : "ruta"}`, value: `${relevantSplit.count}/${relevantSplit.total}`, pct: relevantSplit.pct });
   }
-  if (data.vsPitcher && data.vsPitcher.atBats > 0) {
-    rows.push({ label: `${label}s vs este pitcher (carrera)`, value: `${data.vsPitcher.hits}/${data.vsPitcher.atBats}`, pct: null });
+  if (data.vsPitcher) {
+    rows.push(
+      data.vsPitcher.atBats > 0
+        ? { label: `${label}s vs este pitcher (carrera)`, value: `${data.vsPitcher.hits}/${data.vsPitcher.atBats}`, pct: null }
+        : { label: "vs este pitcher (carrera)", value: "sin turnos registrados", pct: null }
+    );
   }
   if (rows.length === 0) return null;
 
