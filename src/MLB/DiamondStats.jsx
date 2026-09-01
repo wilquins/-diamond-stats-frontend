@@ -778,26 +778,28 @@ function WindFieldIcon({ deg, mph, orientationDeg }) {
   );
 }
 
-// Desglose real de hits de un bateador — mismo formato que apps de picks
-// reales: "Hit en X de los últimos Y juegos", vs equipo rival de hoy, vs
-// casa/ruta, y vs el pitcher específico de hoy en toda su carrera.
-function HitSplitsBreakdown({ splits, opposingTeamCode, isHome }) {
+// Desglose real de hits/sencillos de un bateador — mismo formato que apps
+// de picks reales: "Hit en X de los últimos Y juegos", vs equipo rival de
+// hoy, vs casa/ruta, y vs el pitcher específico de hoy en toda su carrera.
+function HitSplitsBreakdown({ splits, opposingTeamCode, isHome, statType = "hit" }) {
   const [open, setOpen] = useState(false);
-  if (!splits) return null;
+  const data = splits?.[statType];
+  if (!data) return null;
+  const label = statType === "hit" ? "Hit" : "Sencillo";
 
   const rows = [];
-  if (splits.recent && splits.recent.total > 0) {
-    rows.push({ label: `Hit en los últimos ${splits.recent.total} juegos`, value: `${splits.recent.count}/${splits.recent.total}`, pct: splits.recent.pct });
+  if (data.recent && data.recent.total > 0) {
+    rows.push({ label: `${label} en los últimos ${data.recent.total} juegos`, value: `${data.recent.count}/${data.recent.total}`, pct: data.recent.pct });
   }
-  if (splits.vsTeam && splits.vsTeam.total > 0) {
-    rows.push({ label: `Hit en ${splits.vsTeam.total} juegos vs ${opposingTeamCode}`, value: `${splits.vsTeam.count}/${splits.vsTeam.total}`, pct: splits.vsTeam.pct });
+  if (data.vsTeam && data.vsTeam.total > 0) {
+    rows.push({ label: `${label} en ${data.vsTeam.total} juegos vs ${opposingTeamCode}`, value: `${data.vsTeam.count}/${data.vsTeam.total}`, pct: data.vsTeam.pct });
   }
-  const relevantSplit = isHome ? splits.home : splits.away;
+  const relevantSplit = isHome ? data.home : data.away;
   if (relevantSplit && relevantSplit.total > 0) {
-    rows.push({ label: `Hit en ${relevantSplit.total} juegos de ${isHome ? "casa" : "ruta"}`, value: `${relevantSplit.count}/${relevantSplit.total}`, pct: relevantSplit.pct });
+    rows.push({ label: `${label} en ${relevantSplit.total} juegos de ${isHome ? "casa" : "ruta"}`, value: `${relevantSplit.count}/${relevantSplit.total}`, pct: relevantSplit.pct });
   }
-  if (splits.vsPitcher && splits.vsPitcher.atBats > 0) {
-    rows.push({ label: "Hits vs este pitcher (carrera)", value: `${splits.vsPitcher.hits}/${splits.vsPitcher.atBats}`, pct: null });
+  if (data.vsPitcher && data.vsPitcher.atBats > 0) {
+    rows.push({ label: `${label}s vs este pitcher (carrera)`, value: `${data.vsPitcher.hits}/${data.vsPitcher.atBats}`, pct: null });
   }
   if (rows.length === 0) return null;
 
@@ -973,30 +975,34 @@ function TodayGamesHeader() {
             }
 
             let adjustedHit = gp.hit;
+            let adjustedSingle = gp.single;
             if (splits) {
-              const baseRate = gp.hit / 100;
-              let weightedAdj = 0;
-              // vs equipo rival de hoy (mínimo 3 juegos de muestra)
-              if (splits.vsTeam && splits.vsTeam.total >= 3) {
-                weightedAdj += (splits.vsTeam.pct - baseRate) * 0.15;
-              }
-              // vs el pitcher específico de hoy, en toda su carrera (mínimo 3 turnos)
-              if (splits.vsPitcher && splits.vsPitcher.atBats >= 3) {
-                const vsPitcherPerAb = splits.vsPitcher.hits / splits.vsPitcher.atBats;
-                const vsPitcherGameProb = toGameProbability(vsPitcherPerAb * 100, p.ab / p.g) / 100;
-                weightedAdj += (vsPitcherGameProb - baseRate) * 0.15;
-              }
-              // split casa/ruta seg\u00fan corresponda hoy (mínimo 3 juegos)
-              const relevantSplit = isHomeBatter ? splits.home : splits.away;
-              if (relevantSplit && relevantSplit.total >= 3) {
-                weightedAdj += (relevantSplit.pct - baseRate) * 0.10;
-              }
-              adjustedHit = Math.min(95, Math.max(5, gp.hit + weightedAdj * 100));
+              const applyAdjustment = (baseValue, statType) => {
+                const data = splits[statType];
+                if (!data) return baseValue;
+                const baseRate = baseValue / 100;
+                let weightedAdj = 0;
+                if (data.vsTeam && data.vsTeam.total >= 3) {
+                  weightedAdj += (data.vsTeam.pct - baseRate) * 0.15;
+                }
+                if (data.vsPitcher && data.vsPitcher.atBats >= 3) {
+                  const vsPitcherPerAb = data.vsPitcher.hits / data.vsPitcher.atBats;
+                  const vsPitcherGameProb = toGameProbability(vsPitcherPerAb * 100, p.ab / p.g) / 100;
+                  weightedAdj += (vsPitcherGameProb - baseRate) * 0.15;
+                }
+                const relevantSplit = isHomeBatter ? data.home : data.away;
+                if (relevantSplit && relevantSplit.total >= 3) {
+                  weightedAdj += (relevantSplit.pct - baseRate) * 0.10;
+                }
+                return Math.min(95, Math.max(5, baseValue + weightedAdj * 100));
+              };
+              adjustedHit = applyAdjustment(gp.hit, "hit");
+              adjustedSingle = applyAdjustment(gp.single, "single");
             }
 
             return {
               id: p.id, name: p.name, team: p.team, pos: p.pos,
-              hit: adjustedHit, single: gp.single, double: gp.double, hr: gp.hr,
+              hit: adjustedHit, single: adjustedSingle, double: gp.double, hr: gp.hr,
               splits, opposingTeamCode, isHome: isHomeBatter,
             };
           })
@@ -1485,7 +1491,9 @@ function TodayGamesHeader() {
                               {p[cat.key].toFixed(1)}%
                             </span>
                           </div>
-                          {cat.key === "hit" && <HitSplitsBreakdown splits={p.splits} opposingTeamCode={p.opposingTeamCode} isHome={p.isHome} />}
+                          {(cat.key === "hit" || cat.key === "single") && (
+                            <HitSplitsBreakdown splits={p.splits} opposingTeamCode={p.opposingTeamCode} isHome={p.isHome} statType={cat.key === "hit" ? "hit" : "single"} />
+                          )}
                         </div>
                       ))}
                     </div>
