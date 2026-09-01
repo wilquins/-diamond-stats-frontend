@@ -778,6 +778,54 @@ function WindFieldIcon({ deg, mph, orientationDeg }) {
   );
 }
 
+// Desglose real de hits de un bateador — mismo formato que apps de picks
+// reales: "Hit en X de los últimos Y juegos", vs equipo rival de hoy, vs
+// casa/ruta, y vs el pitcher específico de hoy en toda su carrera.
+function HitSplitsBreakdown({ splits, opposingTeamCode, isHome }) {
+  const [open, setOpen] = useState(false);
+  if (!splits) return null;
+
+  const rows = [];
+  if (splits.recent && splits.recent.total > 0) {
+    rows.push({ label: `Hit en los últimos ${splits.recent.total} juegos`, value: `${splits.recent.count}/${splits.recent.total}`, pct: splits.recent.pct });
+  }
+  if (splits.vsTeam && splits.vsTeam.total > 0) {
+    rows.push({ label: `Hit en ${splits.vsTeam.total} juegos vs ${opposingTeamCode}`, value: `${splits.vsTeam.count}/${splits.vsTeam.total}`, pct: splits.vsTeam.pct });
+  }
+  const relevantSplit = isHome ? splits.home : splits.away;
+  if (relevantSplit && relevantSplit.total > 0) {
+    rows.push({ label: `Hit en ${relevantSplit.total} juegos de ${isHome ? "casa" : "ruta"}`, value: `${relevantSplit.count}/${relevantSplit.total}`, pct: relevantSplit.pct });
+  }
+  if (splits.vsPitcher && splits.vsPitcher.atBats > 0) {
+    rows.push({ label: "Hits vs este pitcher (carrera)", value: `${splits.vsPitcher.hits}/${splits.vsPitcher.atBats}`, pct: null });
+  }
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="mt-0.5">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="text-[9px] font-semibold"
+        style={{ color: "#5A9BC8" }}
+      >
+        {open ? "Ocultar desglose ▲" : "Ver desglose ▾"}
+      </button>
+      {open && (
+        <div className="mt-1 space-y-0.5">
+          {rows.map((r, i) => (
+            <div key={i} className="flex items-center justify-between text-[10px]">
+              <span style={{ color: "#8FA599" }}>{r.label}</span>
+              <span style={{ color: "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>
+                {r.value}{r.pct != null ? ` (${(r.pct * 100).toFixed(0)}%)` : ""}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TodayGamesHeader() {
   const [games, setGames] = useState([]);
   const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
@@ -884,7 +932,7 @@ function TodayGamesHeader() {
       fetch(`${BACKEND_URL}/api/team/${game.awayCode}/hitters`).then((r) => r.json()),
       fetch(`${BACKEND_URL}/api/game/${game.gamePk}/lineup`).then((r) => r.json()).catch(() => ({ available: false })),
     ])
-      .then(([homeData, awayData, lineupData]) => {
+      .then(async ([homeData, awayData, lineupData]) => {
         let homeBatters = (homeData.hitters || [])
           .filter((h) => h.ab >= 20)
           .map((h) => ({ ...h, team: game.homeCode, pitcher: pitcherFor(game.awayPitcher) }));
@@ -904,10 +952,55 @@ function TodayGamesHeader() {
         setLineupAvailable(lineupData.available === true);
         setLineupDataState(lineupData.available ? lineupData : null);
 
-        const combined = [...homeBatters, ...awayBatters].map((p) => {
-          const gp = gameProbabilities(p, p.pitcher, game.dayNight);
-          return { id: p.id, name: p.name, team: p.team, pos: p.pos, hit: gp.hit, single: gp.single, double: gp.double, hr: gp.hr };
-        });
+        // Desglose real por bateador: contra el rival de hoy, contra el
+        // pitcher específico de hoy, y su split casa/ruta — y ajusta el %
+        // de hit ya calculado con esta evidencia real (con topes por
+        // muestra mínima, para no dejar que 1-2 juegos distorsionen todo).
+        const combined = await Promise.all(
+          [...homeBatters, ...awayBatters].map(async (p) => {
+            const gp = gameProbabilities(p, p.pitcher, game.dayNight);
+            const isHomeBatter = p.team === game.homeCode;
+            const opposingTeamCode = isHomeBatter ? game.awayCode : game.homeCode;
+            const opposingPitcherId = isHomeBatter ? game.awayPitcher?.id : game.homePitcher?.id;
+
+            let splits = null;
+            if (p.id) {
+              const params = new URLSearchParams({ opposingTeamCode });
+              if (opposingPitcherId) params.set("opposingPitcherId", opposingPitcherId);
+              splits = await fetch(`${BACKEND_URL}/api/player/${p.id}/matchup-splits?${params}`)
+                .then((r) => r.json())
+                .catch(() => null);
+            }
+
+            let adjustedHit = gp.hit;
+            if (splits) {
+              const baseRate = gp.hit / 100;
+              let weightedAdj = 0;
+              // vs equipo rival de hoy (mínimo 3 juegos de muestra)
+              if (splits.vsTeam && splits.vsTeam.total >= 3) {
+                weightedAdj += (splits.vsTeam.pct - baseRate) * 0.15;
+              }
+              // vs el pitcher específico de hoy, en toda su carrera (mínimo 3 turnos)
+              if (splits.vsPitcher && splits.vsPitcher.atBats >= 3) {
+                const vsPitcherPerAb = splits.vsPitcher.hits / splits.vsPitcher.atBats;
+                const vsPitcherGameProb = toGameProbability(vsPitcherPerAb * 100, p.ab / p.g) / 100;
+                weightedAdj += (vsPitcherGameProb - baseRate) * 0.15;
+              }
+              // split casa/ruta seg\u00fan corresponda hoy (mínimo 3 juegos)
+              const relevantSplit = isHomeBatter ? splits.home : splits.away;
+              if (relevantSplit && relevantSplit.total >= 3) {
+                weightedAdj += (relevantSplit.pct - baseRate) * 0.10;
+              }
+              adjustedHit = Math.min(95, Math.max(5, gp.hit + weightedAdj * 100));
+            }
+
+            return {
+              id: p.id, name: p.name, team: p.team, pos: p.pos,
+              hit: adjustedHit, single: gp.single, double: gp.double, hr: gp.hr,
+              splits, opposingTeamCode, isHome: isHomeBatter,
+            };
+          })
+        );
         setGameHitters(combined);
         setHittersLoadStatus("listo");
       })
@@ -1378,18 +1471,21 @@ function TodayGamesHeader() {
                     <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: cat.color }}>{cat.label}</div>
                     <div className="space-y-1.5">
                       {topBy(cat.key).map((p, i) => (
-                        <div key={p.name + cat.key} className="flex items-center justify-between text-[11px]">
-                          <span style={{ color: "#EDEAE1" }}>
-                            {i + 1}. {p.name} <span style={{ color: "#8FA599" }}>({p.team})</span>
-                            {cat.key === "hit" && hitStreaks[p.id] != null && hitStreaks[p.id] >= 2 && (
-                              <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "#1A362A", color: "#3FC97A" }}>
-                                {hitStreaks[p.id]}/{hitStreaks[p.id]}
-                              </span>
-                            )}
-                          </span>
-                          <span className="font-bold tabular-nums" style={{ color: cat.color, fontFamily: "ui-monospace, monospace" }}>
-                            {p[cat.key].toFixed(1)}%
-                          </span>
+                        <div key={p.name + cat.key} className="text-[11px]">
+                          <div className="flex items-center justify-between">
+                            <span style={{ color: "#EDEAE1" }}>
+                              {i + 1}. {p.name} <span style={{ color: "#8FA599" }}>({p.team})</span>
+                              {cat.key === "hit" && hitStreaks[p.id] != null && hitStreaks[p.id] >= 2 && (
+                                <span className="ml-1.5 text-[10px] font-bold px-1.5 py-0.5 rounded-full" style={{ background: "#1A362A", color: "#3FC97A" }}>
+                                  {hitStreaks[p.id]}/{hitStreaks[p.id]}
+                                </span>
+                              )}
+                            </span>
+                            <span className="font-bold tabular-nums" style={{ color: cat.color, fontFamily: "ui-monospace, monospace" }}>
+                              {p[cat.key].toFixed(1)}%
+                            </span>
+                          </div>
+                          {cat.key === "hit" && <HitSplitsBreakdown splits={p.splits} opposingTeamCode={p.opposingTeamCode} isHome={p.isHome} />}
                         </div>
                       ))}
                     </div>
