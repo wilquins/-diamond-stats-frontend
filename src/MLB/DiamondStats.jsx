@@ -2010,26 +2010,32 @@ function PicksAccuracyView({ picksData, picksStatus, checkingPicks, checkPicksNo
       {picksStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
       {picksStatus === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
 
-      {picksStatus === "listo" && picksData && picksData.batters.total === 0 && picksData.teams.total === 0 && (
+      {picksStatus === "listo" && picksData && picksData.batters.total === 0 && picksData.singles.total === 0 && picksData.teams.total === 0 && (
         <p className="text-[13px]" style={{ color: "#8FA599" }}>
           Todavía no hay picks comparados contra resultados reales. La app guarda los picks del día automáticamente cada vez que abres esa pestaña — vuelve en unos días y presiona "Revisar picks de días anteriores".
         </p>
       )}
 
-      {picksStatus === "listo" && picksData && (picksData.batters.total > 0 || picksData.teams.total > 0) && (
+      {picksStatus === "listo" && picksData && (picksData.batters.total > 0 || picksData.singles.total > 0 || picksData.teams.total > 0) && (
         <>
-          <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="grid grid-cols-3 gap-3 mb-4">
             <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
               <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
                 {picksData.batters.accuracy != null ? `${(picksData.batters.accuracy * 100).toFixed(1)}%` : "—"}
               </div>
-              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Bateadores acertados ({picksData.batters.total})</div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Bateadores ({picksData.batters.total})</div>
+            </div>
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                {picksData.singles.accuracy != null ? `${(picksData.singles.accuracy * 100).toFixed(1)}%` : "—"}
+              </div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Sencillos ({picksData.singles.total})</div>
             </div>
             <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
               <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
                 {picksData.teams.accuracy != null ? `${(picksData.teams.accuracy * 100).toFixed(1)}%` : "—"}
               </div>
-              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Equipos acertados ({picksData.teams.total})</div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Equipos ({picksData.teams.total})</div>
             </div>
           </div>
 
@@ -2038,7 +2044,7 @@ function PicksAccuracyView({ picksData, picksStatus, checkingPicks, checkPicksNo
             {picksData.recent.map((r, i) => (
               <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
                 <span style={{ color: "#C9D6CD" }}>{r.date} · {r.name} <span style={{ color: "#8FA599" }}>({r.team})</span></span>
-                <span style={{ color: "#8FA599" }}>{r.type === "batter" ? "Bateador" : "Equipo"} · {(r.prob * 100).toFixed(0)}%</span>
+                <span style={{ color: "#8FA599" }}>{r.type === "batter" ? "Bateador" : r.type === "single" ? "Sencillo" : "Equipo"} · {(r.prob * 100).toFixed(0)}%</span>
                 <span style={{ color: r.success ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>
                   {r.success ? "✓ acertó" : "✗ falló"}
                 </span>
@@ -2084,23 +2090,29 @@ export default function DiamondStats({ onBackToMenu }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Guarda automáticamente los Picks del día (3 bateadores + 3 equipos),
-  // usando la función compartida computeTodaysPicks — la MISMA que usa
-  // la pantalla visible, así nunca pueden mostrar números distintos.
+  // Guarda automáticamente los Picks del día (3 bateadores + 3 sencillos +
+  // 3 equipos), usando la función compartida computeTodaysPicks — la
+  // MISMA que usa la pantalla visible, así nunca pueden mostrar números
+  // distintos.
   useEffect(() => {
     let cancelled = false;
-    computeTodaysPicks().then(({ topHitters, topTeams }) => {
+    computeTodaysPicks().then(({ topHitters, topSingles, topTeams }) => {
       if (cancelled) return;
-      if (topHitters.length > 0 || topTeams.length > 0) savePicksNow(topHitters, topTeams);
+      if (topHitters.length > 0 || topSingles.length > 0 || topTeams.length > 0) savePicksNow(topHitters, topSingles, topTeams);
     }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
-  function savePicksNow(topHitters, topTeams) {
+  function savePicksNow(topHitters, topSingles, topTeams) {
           const pickDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
           const picks = [
             ...topHitters.map(({ player, prob }) => ({
               pick_date: pickDate, pick_type: "batter",
+              player_id: player.id || null, player_name: player.name, team_code: player.team,
+              predicted_prob: prob / 100,
+            })),
+            ...topSingles.map(({ player, prob }) => ({
+              pick_date: pickDate, pick_type: "single",
               player_id: player.id || null, player_name: player.name, team_code: player.team,
               predicted_prob: prob / 100,
             })),
