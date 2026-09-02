@@ -210,6 +210,13 @@ async function computeFullHomeWinProb(game) {
       ? (LEAGUE_AVG_ERA - homeBp.bullpenERA) * 0.025 - (LEAGUE_AVG_ERA - awayBp.bullpenERA) * 0.025
       : 0;
 
+  // Fatiga real del cerrador: identificado por saves reales esta
+  // temporada (no adivinado), penaliza si lanzó en 2+ de los últimos 3
+  // días calendario — aunque su ERA de temporada sea buena, un brazo
+  // cansado de verdad es menos confiable hoy.
+  const closerFatiguePenalty = (bp) => (bp?.closer?.fatigued ? -0.02 : 0);
+  const closerFatigueAdj = closerFatiguePenalty(homeBp) - closerFatiguePenalty(awayBp);
+
   let h2hAdj = 0;
   if (h2h && h2h.gamesPlayed >= 3) {
     const h2hHomePct = h2h.homeTeamWins / h2h.gamesPlayed;
@@ -245,7 +252,7 @@ async function computeFullHomeWinProb(game) {
   };
   const fatigueAdj = fatiguePenalty(homeRest) - fatiguePenalty(awayRest);
 
-  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj));
+  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj));
 
   // ---- Corrección de calibración real ----
   // Con 143 predicciones reales comparadas en Precisión, se encontró que
@@ -1223,7 +1230,7 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara + historial del abridor + descanso)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + forma reciente + cara a cara + historial del abridor + descanso)</div>
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -1321,6 +1328,16 @@ function TodayGamesHeader() {
                     <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
                       <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
                       <div>ERA: <b style={{ color: bp?.bullpenERA != null ? (bp.bullpenERA < 3.5 ? "#FFB627" : bp.bullpenERA > 4.5 ? "#C8393E" : "#C9D6CD") : "#8FA599" }}>{bp?.bullpenERA ?? "—"}</b> · WHIP: <b style={{ color: "#C9D6CD" }}>{bp?.bullpenWHIP ?? "—"}</b></div>
+                      {bp?.closer && (
+                        <div className="mt-1">
+                          Cerrador ({bp.closer.saves} saves): {bp.closer.name}
+                          {bp.closer.fatigued ? (
+                            <span className="ml-1 font-bold" style={{ color: "#C8393E" }}>⚠ lanzó {bp.closer.daysWorkedLast3}/3 últimos días — posible fatiga</span>
+                          ) : (
+                            <span className="ml-1" style={{ color: "#3FC97A" }}>descansado</span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -1670,7 +1687,7 @@ function DailyPicks() {
           Mayor probabilidad de ganar hoy
         </h2>
         {loadStatus === "cargando" && (
-          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 9 factores…</p>
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 10 factores…</p>
         )}
         {loadStatus === "listo" && (
           <div className="space-y-3">
@@ -1691,7 +1708,7 @@ function DailyPicks() {
           </div>
         )}
         <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-          Usa el mismo modelo completo de 9 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + forma reciente + cara a cara + historial del abridor + descanso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
+          Usa el mismo modelo completo de 10 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + forma reciente + cara a cara + historial del abridor + descanso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
         </p>
       </div>
     </div>
