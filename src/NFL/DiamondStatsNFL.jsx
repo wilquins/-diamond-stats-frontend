@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 
 const BACKEND_URL = "https://diamond-stats-backend.onrender.com";
 
-// ---- Modelo de predicción — Fase 3 ----
+// ---- Modelo de predicción — Fase 4 ----
 // Mismo principio de Log5 que usamos en MLB, adaptado a NFL.
 function log5(pctA, pctB) {
   const denom = pctA + pctB - 2 * pctA * pctB;
@@ -17,12 +17,12 @@ function log5(pctA, pctB) {
 const NFL_HOME_ADVANTAGE = 0.032;
 
 // Calcula la probabilidad real de ganar de un partido de NFL, combinando
-// 4 factores reales: récord de temporada (Log5), diferencial de puntos
-// por juego, diferencial de balón (turnovers — una de las métricas más
-// predictivas en NFL, a veces más que el récord), y el historial cara a
-// cara real entre estos dos equipos esta temporada (normalmente 0-1
-// juegos, 2 solo si son rivales de división).
-async function computeNflWinProb(home, away) {
+// 5 factores reales: récord de temporada (Log5), diferencial de puntos
+// por juego, diferencial de balón (turnovers), historial cara a cara
+// real esta temporada, y clima real cuando es adverso (viento fuerte,
+// lluvia probable, o frío extremo) — el local, ya acostumbrado a sus
+// propias condiciones, tiene una ventaja leve real en esos casos.
+async function computeNflWinProb(home, away, weather) {
   if (!home || !away) return null;
   const baseProb = log5(home.winPercent ?? 0.5, away.winPercent ?? 0.5);
 
@@ -58,8 +58,17 @@ async function computeNflWinProb(home, away) {
     h2hAdj = (homeH2hPct - 0.5) * 0.1;
   }
 
-  const prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj;
-  return Math.min(0.92, Math.max(0.08, prob));
+  // Clima real adverso: viento fuerte (15+ mph), alta probabilidad de
+  // lluvia (50%+), o frío extremo (bajo 32°F) — favorece levemente al
+  // local, que juega ahí toda la temporada y ya está acostumbrado.
+  let weatherAdj = 0;
+  if (weather && weather.roofed === false && weather.tempF != null) {
+    const adverse = weather.windMph > 15 || weather.pop > 50 || weather.tempF < 32;
+    if (adverse) weatherAdj = 0.02;
+  }
+
+  const prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj + weatherAdj;
+  return { prob: Math.min(0.92, Math.max(0.08, prob)), diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h };
 }
 
 // ---- Lesiones reales de un equipo, bajo demanda ----
@@ -111,50 +120,16 @@ function TeamInjuries({ teamId, teamName }) {
   );
 }
 
-// ---- Semana de la semana de juegos ----
-function GamesWeek() {
+// ---- Lista compacta de juegos de la semana ----
+function GamesList({ onSelect }) {
   const [data, setData] = useState(null);
-  const [standingsMap, setStandingsMap] = useState({});
-  const [winProbs, setWinProbs] = useState({}); // { [gameId]: homeWinProb }
-  const [weatherData, setWeatherData] = useState({}); // { [gameId]: {...} }
   const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([
-      fetch(`${BACKEND_URL}/api/nfl/games`).then((r) => r.json()),
-      fetch(`${BACKEND_URL}/api/nfl/standings`).then((r) => r.json()).catch(() => ({ teams: [] })),
-    ])
-      .then(async ([gamesData, standingsData]) => {
-        if (cancelled) return;
-        setData(gamesData);
-        const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
-        setStandingsMap(map);
-
-        // Calcula la probabilidad real de cada partido pendiente — ahora
-        // es async (consulta diferencial de balón y cara a cara reales).
-        const probEntries = await Promise.all(
-          (gamesData.games || [])
-            .filter((g) => !g.completed)
-            .map(async (g) => [g.id, await computeNflWinProb(map[g.homeCode], map[g.awayCode])])
-        );
-        if (!cancelled) setWinProbs(Object.fromEntries(probEntries));
-
-        // Clima real del estadio local, para la hora específica del
-        // primer saque — solo para partidos pendientes.
-        const weatherEntries = await Promise.all(
-          (gamesData.games || [])
-            .filter((g) => !g.completed)
-            .map(async (g) => {
-              const w = await fetch(`${BACKEND_URL}/api/nfl/weather/${g.homeCode}?gameTime=${encodeURIComponent(g.date)}`)
-                .then((r) => r.json())
-                .catch(() => null);
-              return [g.id, w];
-            })
-        );
-        if (!cancelled) setWeatherData(Object.fromEntries(weatherEntries));
-        setStatus("listo");
-      })
+    fetch(`${BACKEND_URL}/api/nfl/games`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) { setData(d); setStatus("listo"); } })
       .catch(() => { if (!cancelled) setStatus("error"); });
     return () => { cancelled = true; };
   }, []);
@@ -168,58 +143,174 @@ function GamesWeek() {
       <div className="text-[11px] tracking-widest uppercase mb-3" style={{ color: "#8FA599" }}>
         {data.week ? `Semana ${data.week}` : "Juegos"}
       </div>
-      <div className="flex flex-col gap-2.5">
-        {data.games.map((g) => {
-          const home = standingsMap[g.homeCode];
-          const away = standingsMap[g.awayCode];
-          const homeWinProb = !g.completed ? winProbs[g.id] : null;
-          return (
-            <div key={g.id} className="p-4 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] tracking-widest uppercase" style={{ color: "#8FA599" }}>
-                  {new Date(g.date).toLocaleDateString("es", { weekday: "short", month: "short", day: "numeric" })} · {new Date(g.date).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit", hour12: true })}
-                </span>
-                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: g.completed ? "#1A362A" : "#12281E", color: g.completed ? "#3FC97A" : "#8FA599" }}>
-                  {g.status}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm" style={{ color: g.completed && g.awayScore > g.homeScore ? "#FFB627" : "#EDEAE1" }}>{g.awayName}</span>
-                <div className="flex items-center gap-2">
-                  {homeWinProb != null && <span className="text-[11px] font-semibold tabular-nums" style={{ color: (1 - homeWinProb) >= homeWinProb ? "#FFB627" : "#8FA599", fontFamily: "ui-monospace, monospace" }}>{((1 - homeWinProb) * 100).toFixed(0)}%</span>}
-                  <span className="text-sm font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{g.awayScore ?? "—"}</span>
-                </div>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm" style={{ color: g.completed && g.homeScore > g.awayScore ? "#FFB627" : "#EDEAE1" }}>{g.homeName}</span>
-                <div className="flex items-center gap-2">
-                  {homeWinProb != null && <span className="text-[11px] font-semibold tabular-nums" style={{ color: homeWinProb >= (1 - homeWinProb) ? "#FFB627" : "#8FA599", fontFamily: "ui-monospace, monospace" }}>{(homeWinProb * 100).toFixed(0)}%</span>}
-                  <span className="text-sm font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{g.homeScore ?? "—"}</span>
-                </div>
-              </div>
-              {g.venue && <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>{g.venue}</div>}
-              {!g.completed && weatherData[g.id] && (
-                weatherData[g.id].roofed ? (
-                  <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>Estadio con techo cerrado — el clima no afecta este juego</div>
-                ) : weatherData[g.id].tempF != null ? (
-                  <div className="text-[10px] mt-1" style={{ color: "#8FA599" }}>
-                    {weatherData[g.id].icon} {weatherData[g.id].tempF.toFixed(0)}°F · {weatherData[g.id].description} · Viento {weatherData[g.id].windMph.toFixed(0)} mph
-                  </div>
-                ) : null
-              )}
-              {!g.completed && (
-                <div className="flex gap-2 flex-wrap mt-2">
-                  {away?.id && <TeamInjuries teamId={away.id} teamName={g.awayName} />}
-                  {home?.id && <TeamInjuries teamId={home.id} teamName={g.homeName} />}
-                </div>
-              )}
+      <div className="flex flex-col gap-2">
+        {data.games.map((g) => (
+          <button
+            key={g.id}
+            onClick={() => onSelect(g)}
+            className="w-full text-left p-3.5 rounded-xl border transition-transform hover:scale-[1.01]"
+            style={{ background: "#0F251C", borderColor: "#1F3D30" }}
+          >
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] tracking-widest uppercase" style={{ color: "#8FA599" }}>
+                {new Date(g.date).toLocaleDateString("es", { weekday: "short", month: "short", day: "numeric" })} · {new Date(g.date).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit", hour12: true })}
+              </span>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full" style={{ background: g.completed ? "#1A362A" : "#12281E", color: g.completed ? "#3FC97A" : "#8FA599" }}>
+                {g.status}
+              </span>
             </div>
-          );
-        })}
+            <div className="flex items-center justify-between">
+              <span className="text-sm" style={{ color: g.completed && g.awayScore > g.homeScore ? "#FFB627" : "#EDEAE1" }}>{g.awayName}</span>
+              <span className="text-sm font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{g.awayScore ?? "—"}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-sm" style={{ color: g.completed && g.homeScore > g.awayScore ? "#FFB627" : "#EDEAE1" }}>{g.homeName}</span>
+              <span className="text-sm font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{g.homeScore ?? "—"}</span>
+            </div>
+            {g.venue && <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>{g.venue} · toca para ver el análisis completo</div>}
+          </button>
+        ))}
       </div>
-      <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
-        Probabilidad real: Log5 con récord de temporada + ventaja de casa (3.2%, el promedio real de los últimos 5 años, no el histórico viejo) + diferencial de puntos por juego + diferencial de balón real (turnovers) + historial cara a cara esta temporada (cuando ya se enfrentaron). No incluye lesiones, clima, ni QB confirmado todavía — eso viene en la próxima fase.
-      </p>
+    </div>
+  );
+}
+
+// ---- Detalle completo de un partido ----
+function GameDetail({ game, onBack }) {
+  const [standingsMap, setStandingsMap] = useState(null);
+  const [weather, setWeather] = useState(null);
+  const [result, setResult] = useState(null); // { prob, diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h }
+  const [status, setStatus] = useState("cargando");
+
+  useEffect(() => {
+    let cancelled = false;
+    setStatus("cargando");
+    Promise.all([
+      fetch(`${BACKEND_URL}/api/nfl/standings`).then((r) => r.json()).catch(() => ({ teams: [] })),
+      fetch(`${BACKEND_URL}/api/nfl/weather/${game.homeCode}?gameTime=${encodeURIComponent(game.date)}`).then((r) => r.json()).catch(() => null),
+    ]).then(async ([standingsData, weatherData]) => {
+      if (cancelled) return;
+      const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
+      setStandingsMap(map);
+      setWeather(weatherData);
+      if (!game.completed) {
+        const r = await computeNflWinProb(map[game.homeCode], map[game.awayCode], weatherData);
+        if (!cancelled) setResult(r);
+      }
+      setStatus("listo");
+    }).catch(() => { if (!cancelled) setStatus("error"); });
+    return () => { cancelled = true; };
+  }, [game]);
+
+  const home = standingsMap?.[game.homeCode];
+  const away = standingsMap?.[game.awayCode];
+
+  return (
+    <div className="mb-6">
+      <button
+        onClick={onBack}
+        className="text-[10px] font-semibold px-2 py-1 rounded-full mb-4"
+        style={{ background: "#12281E", color: "#8FA599", border: "1px solid #1F3D30" }}
+      >
+        ← Volver a la lista
+      </button>
+
+      <div className="mb-4">
+        <div className="text-[10px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>
+          {new Date(game.date).toLocaleDateString("es", { weekday: "long", month: "long", day: "numeric" })} · {new Date(game.date).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit", hour12: true })}
+        </div>
+        <div className="text-lg font-bold" style={{ color: "#EDEAE1" }}>{game.awayName} @ {game.homeName}</div>
+        {game.venue && <div className="text-[11px]" style={{ color: "#5A7368" }}>{game.venue}</div>}
+      </div>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con datos reales…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && game.completed && (
+        <div className="p-4 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+          <div className="text-sm font-bold" style={{ color: "#EDEAE1" }}>{game.awayScore} — {game.homeScore}</div>
+          <div className="text-[11px] mt-1" style={{ color: "#8FA599" }}>Juego finalizado</div>
+        </div>
+      )}
+
+      {status === "listo" && !game.completed && result && (
+        <>
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+              Probabilidad de ganar (Log5 + localía + diferencial de puntos + diferencial de balón + cara a cara + clima)
+            </div>
+            <div className="space-y-2.5">
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span style={{ color: (1 - result.prob) >= result.prob ? "#FFB627" : "#C9D6CD" }}>{game.awayName}</span>
+                  <span className="font-bold tabular-nums" style={{ color: (1 - result.prob) >= result.prob ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{((1 - result.prob) * 100).toFixed(1)}%</span>
+                </div>
+                <div className="h-1.5 w-full rounded-full" style={{ background: "#1A362A" }}>
+                  <div className="h-1.5 rounded-full" style={{ width: `${((1 - result.prob) * 100).toFixed(1)}%`, background: (1 - result.prob) >= result.prob ? "#FFB627" : "#5A7368" }} />
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span style={{ color: result.prob > (1 - result.prob) ? "#FFB627" : "#C9D6CD" }}>{game.homeName}</span>
+                  <span className="font-bold tabular-nums" style={{ color: result.prob > (1 - result.prob) ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(result.prob * 100).toFixed(1)}%</span>
+                </div>
+                <div className="h-1.5 w-full rounded-full" style={{ background: "#1A362A" }}>
+                  <div className="h-1.5 rounded-full" style={{ width: `${(result.prob * 100).toFixed(1)}%`, background: result.prob > (1 - result.prob) ? "#FFB627" : "#5A7368" }} />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Clima real del estadio</div>
+            {weather?.roofed ? (
+              <p className="text-[11px]" style={{ color: "#5A7368" }}>Estadio con techo cerrado — el clima no afecta este juego.</p>
+            ) : weather?.tempF != null ? (
+              <>
+                <div className="flex items-center gap-3">
+                  <span style={{ fontSize: "22px" }}>{weather.icon}</span>
+                  <div>
+                    <div className="text-base font-bold tabular-nums" style={{ color: "#EDEAE1", fontFamily: "ui-monospace, monospace" }}>{weather.tempF.toFixed(0)}°F</div>
+                    <div className="text-[10px]" style={{ color: "#8FA599" }}>{weather.description}</div>
+                  </div>
+                  <div className="text-[11px]" style={{ color: "#8FA599" }}>
+                    Viento: <b style={{ color: "#C9D6CD" }}>{weather.windMph.toFixed(0)} mph</b> · P.O.P: <b style={{ color: "#C9D6CD" }}>{weather.pop}%</b>
+                  </div>
+                </div>
+                {result.weatherAdj > 0 && (
+                  <p className="text-[10px] mt-2" style={{ color: "#FFB627" }}>
+                    Clima adverso real — le da una ventaja leve al local, ya acostumbrado a estas condiciones.
+                  </p>
+                )}
+                {weather.forecastFor && (
+                  <p className="text-[10px] mt-1" style={{ color: "#5A7368" }}>
+                    Pronóstico para las {new Date(weather.forecastFor).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit", hour12: true })} — la hora más cercana al saque inicial.
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-[11px]" style={{ color: "#5A7368" }}>No se pudo traer el clima ahora mismo.</p>
+            )}
+          </div>
+
+          {result.h2h && result.h2h.gamesPlayed > 0 && (
+            <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-[10px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>Cara a cara esta temporada</div>
+              <p className="text-[11px]" style={{ color: "#C9D6CD" }}>
+                {game.homeName} {result.h2h.team1Wins}-{result.h2h.team2Wins} {game.awayName} ({result.h2h.gamesPlayed} juego{result.h2h.gamesPlayed > 1 ? "s" : ""})
+              </p>
+            </div>
+          )}
+
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Estado de lesiones (informativo — no se sabe con certeza quién es el QB titular)</div>
+            <div className="flex gap-2 flex-wrap">
+              {away?.id && <TeamInjuries teamId={away.id} teamName={game.awayName} />}
+              {home?.id && <TeamInjuries teamId={home.id} teamName={game.homeName} />}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -277,6 +368,7 @@ function Standings() {
 
 export default function DiamondStatsNFL({ onBackToMenu }) {
   const [view, setView] = useState("juegos"); // "juegos" | "posiciones"
+  const [selectedGame, setSelectedGame] = useState(null);
 
   return (
     <div className="min-h-screen w-full" style={{ background: "#0B1F17" }}>
@@ -285,7 +377,7 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full" style={{ background: "#C8393E" }} />
             <span className="text-[11px] tracking-[0.25em] uppercase" style={{ color: "#8FA599", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
-              NFL Analytics — Fase 3
+              NFL Analytics — Fase 4
             </span>
             {onBackToMenu && (
               <button
@@ -303,36 +395,46 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
           <div className="mt-2 h-px w-full" style={{ background: "repeating-linear-gradient(90deg, #C8393E 0 10px, transparent 10px 20px)" }} />
         </div>
 
-        <div className="flex gap-2 mb-6">
-          <button
-            onClick={() => setView("juegos")}
-            className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-            style={{
-              background: view === "juegos" ? "#FFB627" : "#12281E",
-              color: view === "juegos" ? "#0B1F17" : "#8FA599",
-              border: "1px solid " + (view === "juegos" ? "#FFB627" : "#1F3D30"),
-            }}
-          >
-            Juegos de la semana
-          </button>
-          <button
-            onClick={() => setView("posiciones")}
-            className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-            style={{
-              background: view === "posiciones" ? "#FFB627" : "#12281E",
-              color: view === "posiciones" ? "#0B1F17" : "#8FA599",
-              border: "1px solid " + (view === "posiciones" ? "#FFB627" : "#1F3D30"),
-            }}
-          >
-            Tabla de posiciones
-          </button>
-        </div>
+        {!selectedGame && (
+          <div className="flex gap-2 mb-6">
+            <button
+              onClick={() => setView("juegos")}
+              className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+              style={{
+                background: view === "juegos" ? "#FFB627" : "#12281E",
+                color: view === "juegos" ? "#0B1F17" : "#8FA599",
+                border: "1px solid " + (view === "juegos" ? "#FFB627" : "#1F3D30"),
+              }}
+            >
+              Juegos de la semana
+            </button>
+            <button
+              onClick={() => setView("posiciones")}
+              className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+              style={{
+                background: view === "posiciones" ? "#FFB627" : "#12281E",
+                color: view === "posiciones" ? "#0B1F17" : "#8FA599",
+                border: "1px solid " + (view === "posiciones" ? "#FFB627" : "#1F3D30"),
+              }}
+            >
+              Tabla de posiciones
+            </button>
+          </div>
+        )}
 
-        {view === "juegos" ? <GamesWeek /> : <Standings />}
+        {selectedGame ? (
+          <GameDetail game={selectedGame} onBack={() => setSelectedGame(null)} />
+        ) : view === "juegos" ? (
+          <GamesList onSelect={setSelectedGame} />
+        ) : (
+          <Standings />
+        )}
 
-        <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
-          Fase 3: probabilidad real de ganar con 4 factores (Log5 + ventaja de casa + diferencial de puntos + diferencial de balón + cara a cara). Pendiente para próximas fases: lesiones factoradas en el cálculo (por ahora solo informativas), QB confirmado, clima real, y backtesting — igual que se hizo con MLB.
-        </p>
+        {!selectedGame && (
+          <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
+            Fase 4: probabilidad real con 5 factores (Log5 + ventaja de casa + diferencial de puntos + diferencial de balón + cara a cara + clima adverso). Pendiente: identificar al QB titular real, y backtesting — igual que se hizo con MLB.
+          </p>
+        )}
       </div>
     </div>
   );
