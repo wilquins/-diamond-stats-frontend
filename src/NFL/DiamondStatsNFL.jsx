@@ -304,7 +304,10 @@ function DayPicks() {
       const todayET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
       const pendingGames = (gamesData.games || []).filter((g) => {
         const gameDate = new Date(g.date).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-        return !g.completed && gameDate === todayET;
+        // "Scheduled" = todavía no empieza. Un juego "In Progress" ya no
+        // es una predicción ciega real, aunque técnicamente no esté
+        // "completed" todavía — mismo principio que corregimos en MLB.
+        return g.status === "Scheduled" && gameDate === todayET;
       });
 
       // Probabilidad de ganar de cada partido pendiente — sin clima aquí
@@ -408,7 +411,7 @@ function GameDetail({ game, onBack }) {
       const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
       setStandingsMap(map);
       setWeather(weatherData);
-      if (!game.completed) {
+      if (game.status === "Scheduled") {
         const r = await computeNflWinProb(map[game.homeCode], map[game.awayCode], weatherData);
         if (!cancelled) setResult(r);
 
@@ -456,14 +459,15 @@ function GameDetail({ game, onBack }) {
       {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con datos reales…</p>}
       {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
 
-      {status === "listo" && game.completed && (
+      {status === "listo" && game.status !== "Scheduled" && (
         <div className="p-4 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-          <div className="text-sm font-bold" style={{ color: "#EDEAE1" }}>{game.awayScore} — {game.homeScore}</div>
-          <div className="text-[11px] mt-1" style={{ color: "#8FA599" }}>Juego finalizado</div>
+          <div className="text-sm font-bold" style={{ color: "#EDEAE1" }}>{game.awayScore ?? "—"} — {game.homeScore ?? "—"}</div>
+          <div className="text-[11px] mt-1" style={{ color: "#8FA599" }}>{game.completed ? "Juego finalizado" : `En curso (${game.status})`}</div>
+          <p className="text-[10px] mt-2" style={{ color: "#5A7368" }}>Ya no se muestra probabilidad ni Over/Under — el juego ya empezó, así que esa predicción ya no sería ciega de verdad.</p>
         </div>
       )}
 
-      {status === "listo" && !game.completed && result && (
+      {status === "listo" && game.status === "Scheduled" && result && (
         <>
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
