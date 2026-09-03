@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 
 const BACKEND_URL = "https://diamond-stats-backend.onrender.com";
 
-// ---- Modelo de predicción — Fase 4 ----
+// ---- Modelo de predicción — Fase 5 ----
 // Mismo principio de Log5 que usamos en MLB, adaptado a NFL.
 function log5(pctA, pctB) {
   const denom = pctA + pctB - 2 * pctA * pctB;
@@ -17,11 +17,12 @@ function log5(pctA, pctB) {
 const NFL_HOME_ADVANTAGE = 0.032;
 
 // Calcula la probabilidad real de ganar de un partido de NFL, combinando
-// 5 factores reales: récord de temporada (Log5), diferencial de puntos
+// 6 factores reales: récord de temporada (Log5), diferencial de puntos
 // por juego, diferencial de balón (turnovers), historial cara a cara
-// real esta temporada, y clima real cuando es adverso (viento fuerte,
-// lluvia probable, o frío extremo) — el local, ya acostumbrado a sus
-// propias condiciones, tiene una ventaja leve real en esos casos.
+// real esta temporada, récord real de casa/ruta específico de cada
+// equipo, y clima real cuando es adverso (viento fuerte, lluvia
+// probable, o frío extremo) — el local, ya acostumbrado a sus propias
+// condiciones, tiene una ventaja leve real en esos casos.
 async function computeNflWinProb(home, away, weather) {
   if (!home || !away) return null;
   const baseProb = log5(home.winPercent ?? 0.5, away.winPercent ?? 0.5);
@@ -58,6 +59,23 @@ async function computeNflWinProb(home, away, weather) {
     h2hAdj = (homeH2hPct - 0.5) * 0.1;
   }
 
+  // Récord real de casa del LOCAL vs. récord real de ruta del
+  // VISITANTE — no simétrico, porque a cada uno le importa su propio
+  // lado. Mismo principio que ya usamos en MLB.
+  let homeRoadAdj = 0;
+  const [homeHA, awayHA] = await Promise.all([
+    fetch(`${BACKEND_URL}/api/nfl/team/${home.id}/home-away-record`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/nfl/team/${away.id}/home-away-record`).then((r) => r.json()).catch(() => null),
+  ]);
+  const recPct = (rec) => (rec && rec.w + rec.l > 0 ? rec.w / (rec.w + rec.l) : null);
+  const homeAtHomePct = recPct(homeHA?.homeRecord);
+  const awayOnRoadPct = recPct(awayHA?.awayRecord);
+  if (homeAtHomePct != null && awayOnRoadPct != null) {
+    const homeAtHomeDelta = homeAtHomePct - (home.winPercent ?? 0.5);
+    const awayOnRoadDelta = awayOnRoadPct - (away.winPercent ?? 0.5);
+    homeRoadAdj = (homeAtHomeDelta - awayOnRoadDelta) * 0.3;
+  }
+
   // Clima real adverso: viento fuerte (15+ mph), alta probabilidad de
   // lluvia (50%+), o frío extremo (bajo 32°F) — favorece levemente al
   // local, que juega ahí toda la temporada y ya está acostumbrado.
@@ -67,8 +85,8 @@ async function computeNflWinProb(home, away, weather) {
     if (adverse) weatherAdj = 0.02;
   }
 
-  const prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj + weatherAdj;
-  return { prob: Math.min(0.92, Math.max(0.08, prob)), diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h };
+  const prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj + homeRoadAdj + weatherAdj;
+  return { prob: Math.min(0.92, Math.max(0.08, prob)), diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h, homeHA, awayHA };
 }
 
 // ---- Aproximación de la CDF normal estándar (Abramowitz y Stegun) ----
@@ -297,7 +315,7 @@ function GameDetail({ game, onBack }) {
         <>
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-              Probabilidad de ganar (Log5 + localía + diferencial de puntos + diferencial de balón + cara a cara + clima)
+              Probabilidad de ganar (Log5 + localía + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima)
             </div>
             <div className="space-y-2.5">
               <div>
@@ -351,6 +369,20 @@ function GameDetail({ game, onBack }) {
             ) : (
               <p className="text-[11px]" style={{ color: "#5A7368" }}>No se pudo traer el clima ahora mismo.</p>
             )}
+          </div>
+
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Récord real de casa/ruta esta temporada</div>
+            <div className="grid grid-cols-2 gap-3 text-[11px]" style={{ color: "#8FA599" }}>
+              <div>
+                <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{game.awayName} · Visitante</div>
+                <div>En ruta: <b style={{ color: "#FFB627" }}>{result.awayHA?.awayRecord ? `${result.awayHA.awayRecord.w}-${result.awayHA.awayRecord.l}` : "—"}</b></div>
+              </div>
+              <div>
+                <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{game.homeName} · Local</div>
+                <div>En casa: <b style={{ color: "#FFB627" }}>{result.homeHA?.homeRecord ? `${result.homeHA.homeRecord.w}-${result.homeHA.homeRecord.l}` : "—"}</b></div>
+              </div>
+            </div>
           </div>
 
           {result.h2h && result.h2h.gamesPlayed > 0 && (
@@ -535,7 +567,7 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full" style={{ background: "#C8393E" }} />
             <span className="text-[11px] tracking-[0.25em] uppercase" style={{ color: "#8FA599", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
-              NFL Analytics — Fase 4
+              NFL Analytics — Fase 5
             </span>
             {onBackToMenu && (
               <button
@@ -603,7 +635,7 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
 
         {!selectedGame && (
           <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
-            Fase 4: probabilidad real con 5 factores (Log5 + ventaja de casa + diferencial de puntos + diferencial de balón + cara a cara + clima adverso). Pendiente: identificar al QB titular real, y backtesting — igual que se hizo con MLB.
+            Fase 5: probabilidad real con 6 factores (Log5 + ventaja de casa + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima adverso), más Over/Under con su propio backtesting. Pendiente: identificar al QB titular real.
           </p>
         )}
       </div>
