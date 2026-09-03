@@ -71,6 +71,50 @@ async function computeNflWinProb(home, away, weather) {
   return { prob: Math.min(0.92, Math.max(0.08, prob)), diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h };
 }
 
+// ---- Aproximación de la CDF normal estándar (Abramowitz y Stegun) ----
+function normalCDF(z) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989423 * Math.exp((-z * z) / 2);
+  let prob = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  if (z > 0) prob = 1 - prob;
+  return prob;
+}
+
+// Over/Under real de NFL: puntos esperados del local (promedio entre su
+// ataque y la defensa rival) + puntos esperados del visitante (mismo
+// principio al revés), pasado por una distribución normal — la
+// desviación estándar real de puntos totales en NFL ronda los 10 puntos.
+// El clima adverso reduce el total esperado de verdad (viento dificulta
+// pases y patadas, lluvia complica el manejo del balón).
+function computeNflOverUnder(home, away, weather) {
+  if (!home || !away) return null;
+  const gamesHome = home.wins + home.losses + home.ties;
+  const gamesAway = away.wins + away.losses + away.ties;
+  if (gamesHome === 0 || gamesAway === 0) return null;
+
+  const homePFAvg = home.pointsFor / gamesHome;
+  const homePAAvg = home.pointsAgainst / gamesHome;
+  const awayPFAvg = away.pointsFor / gamesAway;
+  const awayPAAvg = away.pointsAgainst / gamesAway;
+  const expectedHomeScore = (homePFAvg + awayPAAvg) / 2;
+  const expectedAwayScore = (awayPFAvg + homePAAvg) / 2;
+  let expectedTotal = expectedHomeScore + expectedAwayScore;
+
+  if (weather && weather.roofed === false && weather.tempF != null) {
+    if (weather.windMph > 20) expectedTotal *= 0.85;
+    else if (weather.windMph > 15) expectedTotal *= 0.92;
+    if (weather.pop > 50) expectedTotal *= 0.95;
+    if (weather.tempF < 20) expectedTotal *= 0.95;
+  }
+
+  const line = Math.round(expectedTotal * 2) / 2;
+  const SD_NFL_TOTAL = 10; // desviación estándar real aproximada de puntos totales en NFL
+  const z = (line - expectedTotal) / SD_NFL_TOTAL;
+  const underProb = normalCDF(z);
+  const overProb = 1 - underProb;
+  return { line, overProb, underProb, expectedTotal };
+}
+
 // ---- Lesiones reales de un equipo, bajo demanda ----
 function TeamInjuries({ teamId, teamName }) {
   const [open, setOpen] = useState(false);
@@ -147,7 +191,7 @@ function GamesList({ onSelect }) {
         {data.games.map((g) => (
           <button
             key={g.id}
-            onClick={() => onSelect(g)}
+            onClick={() => onSelect({ ...g, week: data.week })}
             className="w-full text-left p-3.5 rounded-xl border transition-transform hover:scale-[1.01]"
             style={{ background: "#0F251C", borderColor: "#1F3D30" }}
           >
@@ -180,6 +224,7 @@ function GameDetail({ game, onBack }) {
   const [standingsMap, setStandingsMap] = useState(null);
   const [weather, setWeather] = useState(null);
   const [result, setResult] = useState(null); // { prob, diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h }
+  const [overUnder, setOverUnder] = useState(null); // { line, overProb, underProb, expectedTotal }
   const [status, setStatus] = useState("cargando");
 
   useEffect(() => {
@@ -196,6 +241,21 @@ function GameDetail({ game, onBack }) {
       if (!game.completed) {
         const r = await computeNflWinProb(map[game.homeCode], map[game.awayCode], weatherData);
         if (!cancelled) setResult(r);
+
+        const ou = computeNflOverUnder(map[game.homeCode], map[game.awayCode], weatherData);
+        if (!cancelled) setOverUnder(ou);
+        if (ou) {
+          const gameDate = new Date(game.date).toISOString().slice(0, 10);
+          fetch(`${BACKEND_URL}/api/nfl/overunder/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              game_date: gameDate, week: game.week || null,
+              home_code: game.homeCode, away_code: game.awayCode,
+              line: ou.line, over_prob: ou.overProb, expected_total: ou.expectedTotal,
+            }),
+          }).catch(() => {});
+        }
       }
       setStatus("listo");
     }).catch(() => { if (!cancelled) setStatus("error"); });
@@ -302,6 +362,27 @@ function GameDetail({ game, onBack }) {
             </div>
           )}
 
+          {overUnder && (
+            <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+                Over/Under estimado · línea {overUnder.line} puntos
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.overProb >= overUnder.underProb ? "#1A362A" : "#0F251C" }}>
+                  <span style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD" }}>Over {overUnder.line}</span>
+                  <span className="font-bold tabular-nums" style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.overProb * 100).toFixed(1)}%</span>
+                </div>
+                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.underProb > overUnder.overProb ? "#1A362A" : "#0F251C" }}>
+                  <span style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD" }}>Under {overUnder.line}</span>
+                  <span className="font-bold tabular-nums" style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.underProb * 100).toFixed(1)}%</span>
+                </div>
+              </div>
+              <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
+                Puntos totales esperados: {overUnder.expectedTotal.toFixed(1)} — combina el ataque y la defensa reales de ambos equipos esta temporada{weather?.roofed === false && (weather?.windMph > 15 || weather?.pop > 50 || weather?.tempF < 20) ? ", ya reducido por el clima adverso real de hoy" : ""}, pasado por una distribución normal (desviación estándar ~10 puntos, típica en NFL).
+              </p>
+            </div>
+          )}
+
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Estado de lesiones (informativo — no se sabe con certeza quién es el QB titular)</div>
             <div className="flex gap-2 flex-wrap">
@@ -366,8 +447,85 @@ function Standings() {
   );
 }
 
+// ---- Precisión real de Over/Under ----
+function OverUnderAccuracy() {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    fetch(`${BACKEND_URL}/api/nfl/overunder/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/nfl/overunder/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  return (
+    <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>Backtesting real — Over/Under</div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>¿Qué tan certero es el Over/Under?</h2>
+
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar Over/Under de semanas anteriores"}
+      </button>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && data && data.totalChecked === 0 && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          Todavía no hay Over/Under comparados contra resultados reales. La app guarda una predicción cada vez que entras al detalle de un partido — vuelve en unos días y presiona "Revisar Over/Under de semanas anteriores".
+        </p>
+      )}
+
+      {status === "listo" && data && data.totalChecked > 0 && (
+        <>
+          <div className="p-3.5 rounded-lg border text-center mb-4" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{(data.accuracy * 100).toFixed(1)}%</div>
+            <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Acertó Over/Under ({data.totalChecked} decisivos)</div>
+          </div>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Últimas comparaciones</div>
+          <div className="space-y-1.5">
+            {data.recent.map((r, i) => {
+              const predictedSide = r.overProb >= 0.5 ? "Over" : "Under";
+              const isPush = r.actualResult === "push";
+              const correct = !isPush && r.actualResult === predictedSide.toLowerCase();
+              return (
+                <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                  <span style={{ color: "#C9D6CD" }}>{r.date} · {r.away} @ {r.home}</span>
+                  <span style={{ color: "#8FA599" }}>Línea {r.line} · Dio {predictedSide}</span>
+                  <span style={{ color: "#C9D6CD" }}>{r.actualTotalPoints} pts reales</span>
+                  <span style={{ color: isPush ? "#8FA599" : correct ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>
+                    {isPush ? "Push" : correct ? "✓ acertó" : "✗ falló"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function DiamondStatsNFL({ onBackToMenu }) {
-  const [view, setView] = useState("juegos"); // "juegos" | "posiciones"
+  const [view, setView] = useState("juegos"); // "juegos" | "posiciones" | "precision"
   const [selectedGame, setSelectedGame] = useState(null);
 
   return (
@@ -419,6 +577,17 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
             >
               Tabla de posiciones
             </button>
+            <button
+              onClick={() => setView("precision")}
+              className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+              style={{
+                background: view === "precision" ? "#FFB627" : "#12281E",
+                color: view === "precision" ? "#0B1F17" : "#8FA599",
+                border: "1px solid " + (view === "precision" ? "#FFB627" : "#1F3D30"),
+              }}
+            >
+              Precisión
+            </button>
           </div>
         )}
 
@@ -426,8 +595,10 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
           <GameDetail game={selectedGame} onBack={() => setSelectedGame(null)} />
         ) : view === "juegos" ? (
           <GamesList onSelect={setSelectedGame} />
-        ) : (
+        ) : view === "posiciones" ? (
           <Standings />
+        ) : (
+          <OverUnderAccuracy />
         )}
 
         {!selectedGame && (
