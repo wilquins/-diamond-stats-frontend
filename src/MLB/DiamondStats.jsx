@@ -205,6 +205,14 @@ async function computeFullHomeWinProb(game) {
   };
   const situationalAdj = situationalDeltaFor(homeSit, recHome.wpct) - situationalDeltaFor(awaySit, recAway.wpct);
 
+  // Récord real de casa del LOCAL vs. récord real de ruta del VISITANTE
+  // — no simétrico, porque a cada uno le importa su propio lado. Si el
+  // local es genuinamente mejor en casa que su promedio, suma; si el
+  // visitante es genuinamente mejor en ruta que su promedio, resta.
+  const homeAtHomeDelta = winPct(homeSit?.homeRecord) != null ? winPct(homeSit.homeRecord) - recHome.wpct : 0;
+  const awayOnRoadDelta = winPct(awaySit?.awayRecord) != null ? winPct(awaySit.awayRecord) - recAway.wpct : 0;
+  const homeRoadAdj = (homeAtHomeDelta - awayOnRoadDelta) * 0.3;
+
   const bullpenAdj =
     homeBp?.bullpenERA != null && awayBp?.bullpenERA != null
       ? (LEAGUE_AVG_ERA - homeBp.bullpenERA) * 0.025 - (LEAGUE_AVG_ERA - awayBp.bullpenERA) * 0.025
@@ -268,7 +276,7 @@ async function computeFullHomeWinProb(game) {
     }
   }
 
-  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj + weatherAdj));
+  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + homeRoadAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj + weatherAdj));
 
   // ---- Corrección de calibración real ----
   // Con 143 predicciones reales comparadas en Precisión, se encontró que
@@ -1246,7 +1254,7 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + forma reciente + cara a cara + historial del abridor + descanso + clima adverso)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso)</div>
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -1374,9 +1382,12 @@ function TodayGamesHeader() {
                   const todayWd = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()];
                   const dn = s && selectedGame.dayNight ? (selectedGame.dayNight === "day" ? s.dayRecord : s.nightRecord) : null;
                   const wd = s?.byWeekday?.[todayWd];
+                  const isHomeTeam = code === selectedGame.homeCode;
+                  const relevantSplit = s ? (isHomeTeam ? s.homeRecord : s.awayRecord) : null;
                   return (
                     <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
                       <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
+                      <div>{isHomeTeam ? "Récord en casa" : "Récord en ruta"}: <b style={{ color: "#FFB627" }}>{relevantSplit ? `${relevantSplit.w}-${relevantSplit.l}` : "—"}</b></div>
                       <div>{selectedGame.dayNight === "day" ? "De día" : "De noche"}: <b style={{ color: "#C9D6CD" }}>{dn ? `${dn.w}-${dn.l}` : "—"}</b></div>
                       <div>{todayWd}: <b style={{ color: "#C9D6CD" }}>{wd ? `${wd.w}-${wd.l}` : "—"}</b></div>
                       <div>Últimos 10: <b style={{ color: "#FFB627" }}>{s?.last10Record ? `${s.last10Record.w}-${s.last10Record.l}` : "—"}</b></div>
@@ -1703,7 +1714,7 @@ function DailyPicks() {
           Mayor probabilidad de ganar hoy
         </h2>
         {loadStatus === "cargando" && (
-          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 11 factores…</p>
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 12 factores…</p>
         )}
         {loadStatus === "listo" && (
           <div className="space-y-3">
@@ -1724,7 +1735,7 @@ function DailyPicks() {
           </div>
         )}
         <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-          Usa el mismo modelo completo de 11 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + forma reciente + cara a cara + historial del abridor + descanso + clima adverso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
+          Usa el mismo modelo completo de 12 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
         </p>
       </div>
     </div>
