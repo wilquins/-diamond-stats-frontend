@@ -300,9 +300,14 @@ async function computeFullHomeWinProb(game) {
 // pueden mostrar números distintos entre sí.
 async function computeTodaysPicks() {
   const gamesData = await fetch(`${BACKEND_URL}/api/games/today`).then((r) => r.json());
+  // Solo juegos que TODAVÍA no han empezado — un pick de "mayor
+  // probabilidad de hoy" no tiene sentido para un juego ya en curso o
+  // terminado, aunque siga siendo técnicamente "de hoy".
+  const notStartedStates = new Set(["Scheduled", "Pre-Game", "Warmup", "Delayed Start", "Delayed"]);
+  const upcomingGames = (gamesData.games || []).filter((g) => notStartedStates.has(g.status));
   const teamsPlayingToday = new Set();
   const gameByCode = {};
-  for (const g of gamesData.games || []) {
+  for (const g of upcomingGames) {
     if (g.homeCode) { teamsPlayingToday.add(g.homeCode); gameByCode[g.homeCode] = g; }
     if (g.awayCode) { teamsPlayingToday.add(g.awayCode); gameByCode[g.awayCode] = g; }
   }
@@ -921,11 +926,13 @@ function TodayGamesHeader() {
         setGames(data.games || []);
         setStatus("listo");
 
-        // Guarda automáticamente la predicción de TODOS los partidos
-        // reales de hoy, usando la misma función compartida de arriba —
-        // así no hay dos versiones distintas del modelo corriendo.
+        // Guarda automáticamente la predicción de los partidos de hoy
+        // que TODAVÍA no han empezado — un juego ya en curso o terminado
+        // no es una predicción ciega real, y guardarla contaminaría el
+        // backtesting de Precisión con datos que no son honestos.
+        const notStartedStates = new Set(["Scheduled", "Pre-Game", "Warmup", "Delayed Start", "Delayed"]);
         const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-        for (const g of data.games || []) {
+        for (const g of (data.games || []).filter((g) => notStartedStates.has(g.status))) {
           computeFullHomeWinProb(g).then((homeWinProb) => {
             if (homeWinProb == null) return;
             fetch(`${BACKEND_URL}/api/predictions/save`, {
@@ -969,13 +976,16 @@ function TodayGamesHeader() {
     });
 
     // Mismo principio para Over/Under, y se guarda automáticamente en
-    // cuanto se calcula (igual que la probabilidad de ganar).
+    // cuanto se calcula (igual que la probabilidad de ganar) — solo si
+    // el juego todavía no ha empezado, para no contaminar el
+    // backtesting con una "predicción" que ya no es ciega de verdad.
     setComputedOverUnder(null);
     setOverUnderStatus("cargando");
     computeOverUnder(game).then((ou) => {
       setComputedOverUnder(ou);
       setOverUnderStatus(ou != null ? "listo" : "error");
-      if (ou != null) {
+      const notStartedStates = new Set(["Scheduled", "Pre-Game", "Warmup", "Delayed Start", "Delayed"]);
+      if (ou != null && notStartedStates.has(game.status)) {
         const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
         fetch(`${BACKEND_URL}/api/overunder/save`, {
           method: "POST",
