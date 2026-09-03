@@ -354,33 +354,33 @@ function DayPicks() {
   if (!picks) return null;
 
   const sections = [
-    { label: "Mejor pick de equipo", items: picks.topTeams.map((t) => ({ name: `${t.team} vs ${t.opponent}`, stat: `${(t.prob * 100).toFixed(1)}%` })) },
-    { label: "Mejores QB (yardas de pase)", items: picks.topQB.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
-    { label: "Mejores RB (yardas de acarreo)", items: picks.topRB.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
-    { label: "Mejores receptores (yardas de recepción)", items: picks.topWR.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
-    { label: "Más probables en anotar TD", items: picks.topTD.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${(p.tdProbability * 100).toFixed(0)}%` })) },
-  ].filter((s) => s.items.length > 0);
-
-  if (sections.length === 0) {
-    return <p className="text-[11px]" style={{ color: "#8FA599" }}>Todavía no hay datos reales suficientes hoy (la temporada regular no ha empezado, o no hay juegos programados para hoy).</p>;
-  }
+    { label: "Mayor probabilidad de ganar hoy", items: picks.topTeams.map((t) => ({ name: `${t.team} vs ${t.opponent}`, stat: `${(t.prob * 100).toFixed(1)}%` })) },
+    { label: "Más yardas de pase hoy (QB)", items: picks.topQB.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
+    { label: "Más yardas de acarreo hoy (RB)", items: picks.topRB.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
+    { label: "Más yardas de recepción hoy", items: picks.topWR.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
+    { label: "Mayor probabilidad de touchdown hoy", items: picks.topTD.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${(p.tdProbability * 100).toFixed(0)}%` })) },
+  ];
 
   return (
     <div className="space-y-4">
       {sections.map((s) => (
         <div key={s.label} className="p-3.5 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
           <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>{s.label}</div>
-          <div className="space-y-1.5">
-            {s.items.map((item, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
-                  {i + 1}
+          {s.items.length === 0 ? (
+            <p className="text-[11px]" style={{ color: "#5A7368" }}>Sin datos suficientes hoy — puede ser que no haya juegos programados, o que la temporada regular no haya empezado todavía.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {s.items.map((item, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                    {i + 1}
+                  </div>
+                  <span className="text-sm flex-1" style={{ color: "#EDEAE1" }}>{item.name}</span>
+                  <span className="text-sm font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{item.stat}</span>
                 </div>
-                <span className="text-sm flex-1" style={{ color: "#EDEAE1" }}>{item.name}</span>
-                <span className="text-sm font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{item.stat}</span>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       ))}
       <p className="text-[10px] mt-2 leading-relaxed" style={{ color: "#5A7368" }}>
