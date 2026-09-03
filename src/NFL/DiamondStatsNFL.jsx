@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 
 const BACKEND_URL = "https://diamond-stats-backend.onrender.com";
 
-// ---- Modelo de predicción — Fase 2 ----
+// ---- Modelo de predicción — Fase 3 ----
 // Mismo principio de Log5 que usamos en MLB, adaptado a NFL.
 function log5(pctA, pctB) {
   const denom = pctA + pctB - 2 * pctA * pctB;
@@ -17,10 +17,12 @@ function log5(pctA, pctB) {
 const NFL_HOME_ADVANTAGE = 0.032;
 
 // Calcula la probabilidad real de ganar de un partido de NFL, combinando
-// el récord de temporada (Log5) con el diferencial de puntos por juego
-// de cada equipo — una señal más fina que el récord solo, útil sobre
-// todo temprano en la temporada cuando hay pocos juegos de muestra.
-function computeNflWinProb(home, away) {
+// 4 factores reales: récord de temporada (Log5), diferencial de puntos
+// por juego, diferencial de balón (turnovers — una de las métricas más
+// predictivas en NFL, a veces más que el récord), y el historial cara a
+// cara real entre estos dos equipos esta temporada (normalmente 0-1
+// juegos, 2 solo si son rivales de división).
+async function computeNflWinProb(home, away) {
   if (!home || !away) return null;
   const baseProb = log5(home.winPercent ?? 0.5, away.winPercent ?? 0.5);
 
@@ -33,7 +35,30 @@ function computeNflWinProb(home, away) {
   // distorsione todo el cálculo.
   const diffAdj = Math.max(-0.15, Math.min(0.15, (homeDiffPerGame - awayDiffPerGame) * 0.02));
 
-  const prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj;
+  // Diferencial de balón real, normalizado por juego — un equipo que
+  // roba más balones de los que pierde genuinamente gana más de lo que
+  // su récord solo sugiere.
+  let turnoverAdj = 0;
+  const [homeStats, awayStats] = await Promise.all([
+    fetch(`${BACKEND_URL}/api/nfl/team/${home.id}/stats`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/nfl/team/${away.id}/stats`).then((r) => r.json()).catch(() => null),
+  ]);
+  if (homeStats?.turnoverDifferential != null && awayStats?.turnoverDifferential != null && gamesHome > 0 && gamesAway > 0) {
+    const homeTOPerGame = homeStats.turnoverDifferential / gamesHome;
+    const awayTOPerGame = awayStats.turnoverDifferential / gamesAway;
+    turnoverAdj = Math.max(-0.1, Math.min(0.1, (homeTOPerGame - awayTOPerGame) * 0.05));
+  }
+
+  // Cara a cara real esta temporada — solo se activa si ya se
+  // enfrentaron (normalmente rivales de división más adelante).
+  let h2hAdj = 0;
+  const h2h = await fetch(`${BACKEND_URL}/api/nfl/headtohead/${home.id}/${away.id}`).then((r) => r.json()).catch(() => null);
+  if (h2h && h2h.gamesPlayed > 0) {
+    const homeH2hPct = h2h.team1Wins / h2h.gamesPlayed;
+    h2hAdj = (homeH2hPct - 0.5) * 0.1;
+  }
+
+  const prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj;
   return Math.min(0.92, Math.max(0.08, prob));
 }
 
@@ -90,6 +115,7 @@ function TeamInjuries({ teamId, teamName }) {
 function GamesWeek() {
   const [data, setData] = useState(null);
   const [standingsMap, setStandingsMap] = useState({});
+  const [winProbs, setWinProbs] = useState({}); // { [gameId]: homeWinProb }
   const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
 
   useEffect(() => {
@@ -98,11 +124,20 @@ function GamesWeek() {
       fetch(`${BACKEND_URL}/api/nfl/games`).then((r) => r.json()),
       fetch(`${BACKEND_URL}/api/nfl/standings`).then((r) => r.json()).catch(() => ({ teams: [] })),
     ])
-      .then(([gamesData, standingsData]) => {
+      .then(async ([gamesData, standingsData]) => {
         if (cancelled) return;
         setData(gamesData);
         const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
         setStandingsMap(map);
+
+        // Calcula la probabilidad real de cada partido pendiente — ahora
+        // es async (consulta diferencial de balón y cara a cara reales).
+        const probEntries = await Promise.all(
+          (gamesData.games || [])
+            .filter((g) => !g.completed)
+            .map(async (g) => [g.id, await computeNflWinProb(map[g.homeCode], map[g.awayCode])])
+        );
+        if (!cancelled) setWinProbs(Object.fromEntries(probEntries));
         setStatus("listo");
       })
       .catch(() => { if (!cancelled) setStatus("error"); });
@@ -122,7 +157,7 @@ function GamesWeek() {
         {data.games.map((g) => {
           const home = standingsMap[g.homeCode];
           const away = standingsMap[g.awayCode];
-          const homeWinProb = !g.completed ? computeNflWinProb(home, away) : null;
+          const homeWinProb = !g.completed ? winProbs[g.id] : null;
           return (
             <div key={g.id} className="p-4 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
               <div className="flex items-center justify-between mb-1">
@@ -159,7 +194,7 @@ function GamesWeek() {
         })}
       </div>
       <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
-        Probabilidad real: Log5 con récord de temporada + ventaja de casa (3.2%, el promedio real de los últimos 5 años, no el histórico viejo) + diferencial de puntos por juego. No incluye lesiones, clima, ni QB confirmado todavía — eso viene en la próxima fase.
+        Probabilidad real: Log5 con récord de temporada + ventaja de casa (3.2%, el promedio real de los últimos 5 años, no el histórico viejo) + diferencial de puntos por juego + diferencial de balón real (turnovers) + historial cara a cara esta temporada (cuando ya se enfrentaron). No incluye lesiones, clima, ni QB confirmado todavía — eso viene en la próxima fase.
       </p>
     </div>
   );
@@ -226,7 +261,7 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full" style={{ background: "#C8393E" }} />
             <span className="text-[11px] tracking-[0.25em] uppercase" style={{ color: "#8FA599", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
-              NFL Analytics — Fase 2
+              NFL Analytics — Fase 3
             </span>
             {onBackToMenu && (
               <button
@@ -272,7 +307,7 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
         {view === "juegos" ? <GamesWeek /> : <Standings />}
 
         <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
-          Fase 2: probabilidad real de ganar conectada (Log5 + ventaja de casa real + diferencial de puntos). Pendiente para próximas fases: lesiones, QB confirmado, clima real, y backtesting — igual que se hizo con MLB.
+          Fase 3: probabilidad real de ganar con 4 factores (Log5 + ventaja de casa + diferencial de puntos + diferencial de balón + cara a cara). Pendiente para próximas fases: lesiones factoradas en el cálculo (por ahora solo informativas), QB confirmado, clima real, y backtesting — igual que se hizo con MLB.
         </p>
       </div>
     </div>
