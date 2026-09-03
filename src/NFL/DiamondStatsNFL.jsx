@@ -116,6 +116,7 @@ function GamesWeek() {
   const [data, setData] = useState(null);
   const [standingsMap, setStandingsMap] = useState({});
   const [winProbs, setWinProbs] = useState({}); // { [gameId]: homeWinProb }
+  const [weatherData, setWeatherData] = useState({}); // { [gameId]: {...} }
   const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
 
   useEffect(() => {
@@ -138,6 +139,20 @@ function GamesWeek() {
             .map(async (g) => [g.id, await computeNflWinProb(map[g.homeCode], map[g.awayCode])])
         );
         if (!cancelled) setWinProbs(Object.fromEntries(probEntries));
+
+        // Clima real del estadio local, para la hora específica del
+        // primer saque — solo para partidos pendientes.
+        const weatherEntries = await Promise.all(
+          (gamesData.games || [])
+            .filter((g) => !g.completed)
+            .map(async (g) => {
+              const w = await fetch(`${BACKEND_URL}/api/nfl/weather/${g.homeCode}?gameTime=${encodeURIComponent(g.date)}`)
+                .then((r) => r.json())
+                .catch(() => null);
+              return [g.id, w];
+            })
+        );
+        if (!cancelled) setWeatherData(Object.fromEntries(weatherEntries));
         setStatus("listo");
       })
       .catch(() => { if (!cancelled) setStatus("error"); });
@@ -183,6 +198,15 @@ function GamesWeek() {
                 </div>
               </div>
               {g.venue && <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>{g.venue}</div>}
+              {!g.completed && weatherData[g.id] && (
+                weatherData[g.id].roofed ? (
+                  <div className="text-[10px] mt-1" style={{ color: "#5A7368" }}>Estadio con techo cerrado — el clima no afecta este juego</div>
+                ) : weatherData[g.id].tempF != null ? (
+                  <div className="text-[10px] mt-1" style={{ color: "#8FA599" }}>
+                    {weatherData[g.id].icon} {weatherData[g.id].tempF.toFixed(0)}°F · {weatherData[g.id].description} · Viento {weatherData[g.id].windMph.toFixed(0)} mph
+                  </div>
+                ) : null
+              )}
               {!g.completed && (
                 <div className="flex gap-2 flex-wrap mt-2">
                   {away?.id && <TeamInjuries teamId={away.id} teamName={g.awayName} />}
