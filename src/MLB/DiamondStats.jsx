@@ -252,7 +252,23 @@ async function computeFullHomeWinProb(game) {
   };
   const fatigueAdj = fatiguePenalty(homeRest) - fatiguePenalty(awayRest);
 
-  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj));
+  // Clima real adverso: viento fuerte (15+ mph), alta probabilidad de
+  // lluvia (50%+), o frío real (bajo 40°F) — favorece levemente al
+  // local, que juega ahí toda la temporada y ya está acostumbrado a
+  // esas condiciones específicas de su propio estadio. Mismo principio
+  // que ya usamos en NFL.
+  let weatherAdj = 0;
+  if (!stadium.roofed) {
+    const weather = await fetch(`${BACKEND_URL}/api/weather/${game.homeCode}?gameTime=${encodeURIComponent(game.time)}`)
+      .then((r) => r.json())
+      .catch(() => null);
+    if (weather && weather.tempF != null) {
+      const adverse = weather.windMph > 15 || weather.pop > 50 || weather.tempF < 40;
+      if (adverse) weatherAdj = 0.02;
+    }
+  }
+
+  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj + weatherAdj));
 
   // ---- Corrección de calibración real ----
   // Con 143 predicciones reales comparadas en Precisión, se encontró que
@@ -1230,7 +1246,7 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + forma reciente + cara a cara + historial del abridor + descanso)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + forma reciente + cara a cara + historial del abridor + descanso + clima adverso)</div>
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -1687,7 +1703,7 @@ function DailyPicks() {
           Mayor probabilidad de ganar hoy
         </h2>
         {loadStatus === "cargando" && (
-          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 10 factores…</p>
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 11 factores…</p>
         )}
         {loadStatus === "listo" && (
           <div className="space-y-3">
@@ -1708,7 +1724,7 @@ function DailyPicks() {
           </div>
         )}
         <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-          Usa el mismo modelo completo de 10 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + forma reciente + cara a cara + historial del abridor + descanso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
+          Usa el mismo modelo completo de 11 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + forma reciente + cara a cara + historial del abridor + descanso + clima adverso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
         </p>
       </div>
     </div>
