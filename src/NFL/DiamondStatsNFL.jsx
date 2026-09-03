@@ -286,6 +286,110 @@ function SkillPlayerStats({ homeTeamId, awayTeamId }) {
   );
 }
 
+// ---- Picks del día: lo mejor de lo mejor, de los partidos de HOY ----
+function DayPicks() {
+  const [picks, setPicks] = useState(null);
+  const [status, setStatus] = useState("cargando");
+
+  useEffect(() => {
+    let cancelled = false;
+    setStatus("cargando");
+    (async () => {
+      const [gamesData, standingsData] = await Promise.all([
+        fetch(`${BACKEND_URL}/api/nfl/games`).then((r) => r.json()).catch(() => ({ games: [] })),
+        fetch(`${BACKEND_URL}/api/nfl/standings`).then((r) => r.json()).catch(() => ({ teams: [] })),
+      ]);
+      if (cancelled) return;
+      const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
+      const todayET = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      const pendingGames = (gamesData.games || []).filter((g) => {
+        const gameDate = new Date(g.date).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+        return !g.completed && gameDate === todayET;
+      });
+
+      // Probabilidad de ganar de cada partido pendiente — sin clima aquí
+      // (consultarlo para todos los partidos de hoy sería muy
+      // pesado); el detalle completo con clima real sigue disponible al
+      // tocar cada partido específico.
+      const teamPicks = [];
+      for (const g of pendingGames) {
+        const r = await computeNflWinProb(map[g.homeCode], map[g.awayCode], null);
+        if (r) {
+          const homeWins = r.prob >= 0.5;
+          teamPicks.push({
+            team: homeWins ? g.homeName : g.awayName,
+            opponent: homeWins ? g.awayName : g.homeName,
+            prob: Math.max(r.prob, 1 - r.prob),
+          });
+        }
+      }
+      teamPicks.sort((a, b) => b.prob - a.prob);
+
+      // Jugadores: consulta a todos los equipos con partido hoy.
+      const teamIdsInvolved = new Set();
+      for (const g of pendingGames) {
+        if (map[g.homeCode]?.id) teamIdsInvolved.add(map[g.homeCode].id);
+        if (map[g.awayCode]?.id) teamIdsInvolved.add(map[g.awayCode].id);
+      }
+      const allPlayers = [];
+      await Promise.all(
+        [...teamIdsInvolved].map(async (id) => {
+          const d = await fetch(`${BACKEND_URL}/api/nfl/team/${id}/skill-stats`).then((r) => r.json()).catch(() => ({ players: [] }));
+          allPlayers.push(...(d.players || []));
+        })
+      );
+      const topByType = (type) => [...allPlayers].filter((p) => p.type === type).sort((a, b) => b.ydsPerGame - a.ydsPerGame).slice(0, 3);
+      const topTD = [...allPlayers].sort((a, b) => b.tdProbability - a.tdProbability).slice(0, 3);
+
+      if (!cancelled) {
+        setPicks({ topTeams: teamPicks.slice(0, 3), topQB: topByType("passing"), topRB: topByType("rushing"), topWR: topByType("receiving"), topTD });
+        setStatus("listo");
+      }
+    })().catch(() => { if (!cancelled) setStatus("error"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (status === "cargando") return <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con datos reales de los partidos de hoy… puede tardar un poco.</p>;
+  if (status === "error") return <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>;
+  if (!picks) return null;
+
+  const sections = [
+    { label: "Mejor pick de equipo", items: picks.topTeams.map((t) => ({ name: `${t.team} vs ${t.opponent}`, stat: `${(t.prob * 100).toFixed(1)}%` })) },
+    { label: "Mejores QB (yardas de pase)", items: picks.topQB.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
+    { label: "Mejores RB (yardas de acarreo)", items: picks.topRB.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
+    { label: "Mejores receptores (yardas de recepción)", items: picks.topWR.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
+    { label: "Más probables en anotar TD", items: picks.topTD.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${(p.tdProbability * 100).toFixed(0)}%` })) },
+  ].filter((s) => s.items.length > 0);
+
+  if (sections.length === 0) {
+    return <p className="text-[11px]" style={{ color: "#8FA599" }}>Todavía no hay datos reales suficientes hoy (la temporada regular no ha empezado, o no hay juegos programados para hoy).</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {sections.map((s) => (
+        <div key={s.label} className="p-3.5 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>{s.label}</div>
+          <div className="space-y-1.5">
+            {s.items.map((item, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                  {i + 1}
+                </div>
+                <span className="text-sm flex-1" style={{ color: "#EDEAE1" }}>{item.name}</span>
+                <span className="text-sm font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{item.stat}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+      <p className="text-[10px] mt-2 leading-relaxed" style={{ color: "#5A7368" }}>
+        Lo mejor de lo mejor, entre TODOS los partidos pendientes de HOY — no solo uno. El clima real de cada partido específico se ve al entrar a su detalle.
+      </p>
+    </div>
+  );
+}
+
 function GameDetail({ game, onBack }) {
   const [standingsMap, setStandingsMap] = useState(null);
   const [weather, setWeather] = useState(null);
@@ -612,7 +716,7 @@ function OverUnderAccuracy() {
 }
 
 export default function DiamondStatsNFL({ onBackToMenu }) {
-  const [view, setView] = useState("juegos"); // "juegos" | "posiciones" | "precision"
+  const [view, setView] = useState("juegos"); // "juegos" | "picks" | "posiciones" | "precision"
   const [selectedGame, setSelectedGame] = useState(null);
 
   return (
@@ -654,6 +758,17 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
               Juegos de la semana
             </button>
             <button
+              onClick={() => setView("picks")}
+              className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+              style={{
+                background: view === "picks" ? "#FFB627" : "#12281E",
+                color: view === "picks" ? "#0B1F17" : "#8FA599",
+                border: "1px solid " + (view === "picks" ? "#FFB627" : "#1F3D30"),
+              }}
+            >
+              Picks del día
+            </button>
+            <button
               onClick={() => setView("posiciones")}
               className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
               style={{
@@ -682,6 +797,8 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
           <GameDetail game={selectedGame} onBack={() => setSelectedGame(null)} />
         ) : view === "juegos" ? (
           <GamesList onSelect={setSelectedGame} />
+        ) : view === "picks" ? (
+          <DayPicks />
         ) : view === "posiciones" ? (
           <Standings />
         ) : (
