@@ -238,6 +238,54 @@ function GamesList({ onSelect }) {
 }
 
 // ---- Detalle completo de un partido ----
+// ---- Yardas reales y probabilidad de touchdown de jugadores ofensivos ----
+// ---- El jugador con más posibilidad real de cada cosa, en ESTE partido ----
+function SkillPlayerStats({ homeTeamId, awayTeamId }) {
+  const [players, setPlayers] = useState(null);
+  const [status, setStatus] = useState("cargando");
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      fetch(`${BACKEND_URL}/api/nfl/team/${homeTeamId}/skill-stats`).then((r) => r.json()).catch(() => ({ players: [] })),
+      fetch(`${BACKEND_URL}/api/nfl/team/${awayTeamId}/skill-stats`).then((r) => r.json()).catch(() => ({ players: [] })),
+    ]).then(([homeData, awayData]) => {
+      if (cancelled) return;
+      setPlayers([...(homeData.players || []), ...(awayData.players || [])]);
+      setStatus("listo");
+    }).catch(() => { if (!cancelled) setStatus("error"); });
+    return () => { cancelled = true; };
+  }, [homeTeamId, awayTeamId]);
+
+  if (status === "cargando") return <p className="text-[10px]" style={{ color: "#5A7368" }}>Calculando con datos reales de ambos equipos…</p>;
+  if (status === "error") return <p className="text-[10px]" style={{ color: "#5A7368" }}>No se pudo traer las estadísticas ahora mismo.</p>;
+  if (!players || players.length === 0) return <p className="text-[10px]" style={{ color: "#5A7368" }}>Sin jugadores con uso real registrado todavía.</p>;
+
+  const topByType = (type) => players.filter((p) => p.type === type).sort((a, b) => b.ydsPerGame - a.ydsPerGame)[0];
+  const topTD = [...players].sort((a, b) => b.tdProbability - a.tdProbability)[0];
+
+  const rows = [
+    { label: "Más yardas de pase", player: topByType("passing"), stat: (p) => `${p.ydsPerGame.toFixed(0)} yds/juego` },
+    { label: "Más yardas de acarreo", player: topByType("rushing"), stat: (p) => `${p.ydsPerGame.toFixed(0)} yds/juego` },
+    { label: "Más yardas de recepción", player: topByType("receiving"), stat: (p) => `${p.ydsPerGame.toFixed(0)} yds/juego` },
+    { label: "Más probable en anotar TD", player: topTD, stat: (p) => `${(p.tdProbability * 100).toFixed(0)}%` },
+  ].filter((r) => r.player);
+
+  return (
+    <div className="space-y-1.5">
+      {rows.map((r) => (
+        <div key={r.label} className="flex items-center justify-between text-[11px] px-2 py-1.5 rounded" style={{ background: "#0F251C" }}>
+          <div>
+            <div style={{ color: "#5A7368", fontSize: "9px" }}>{r.label}</div>
+            <div style={{ color: "#C9D6CD" }}>{r.player.name} <span style={{ color: "#5A7368" }}>({r.player.position})</span></div>
+          </div>
+          <span className="font-bold" style={{ color: "#FFB627" }}>{r.stat(r.player)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function GameDetail({ game, onBack }) {
   const [standingsMap, setStandingsMap] = useState(null);
   const [weather, setWeather] = useState(null);
@@ -414,6 +462,13 @@ function GameDetail({ game, onBack }) {
               </p>
             </div>
           )}
+
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+              Mejor candidato real en este partido (yardas de temporada + probabilidad de TD por Poisson)
+            </div>
+            {away?.id && home?.id && <SkillPlayerStats homeTeamId={home.id} awayTeamId={away.id} />}
+          </div>
 
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Estado de lesiones (informativo — no se sabe con certeza quién es el QB titular)</div>
