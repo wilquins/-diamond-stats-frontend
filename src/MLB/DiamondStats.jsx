@@ -60,13 +60,34 @@ const TEAMS = ["Todos", ...Object.keys(TEAM_IDS).sort()];
 // probabilidad por turno al bate. Sencillos = hits que no fueron doble,
 // triple ni jonrón. Esto reproduce el AVG exacto del jugador (H/AB), solo
 // que desglosado por tipo de embasado.
+// Probabilidades reales de un bateador — usa su promedio ya ajustado
+// por BABIP contra su propio historial de carrera cuando está
+// disponible (más predictivo que el promedio de temporada puro, que
+// puede estar inflado o desinflado por suerte real de esta temporada).
+// Los jonrones nunca se ajustan (no dependen de BABIP); single/doble/
+// triple se escalan proporcionalmente al mismo ajuste.
 function hitProbabilities(p) {
-  const singles = p.h - p.doubles - p.triples - p.hr;
+  const rawSingles = p.h - p.doubles - p.triples - p.hr;
+  const rawNonHrHits = p.h - p.hr;
+
+  let hitRate = p.h / p.ab;
+  let singles = rawSingles, doubles = p.doubles, triples = p.triples;
+
+  if (p.babipAdjustedAvg != null && rawNonHrHits > 0) {
+    const adjustedTotalHits = p.babipAdjustedAvg * p.ab;
+    const adjustedNonHrHits = adjustedTotalHits - p.hr;
+    const scaleFactor = adjustedNonHrHits / rawNonHrHits;
+    hitRate = p.babipAdjustedAvg;
+    singles = rawSingles * scaleFactor;
+    doubles = p.doubles * scaleFactor;
+    triples = p.triples * scaleFactor;
+  }
+
   return {
-    hit: (p.h / p.ab) * 100,
+    hit: hitRate * 100,
     single: (singles / p.ab) * 100,
-    double: (p.doubles / p.ab) * 100,
-    triple: (p.triples / p.ab) * 100,
+    double: (doubles / p.ab) * 100,
+    triple: (triples / p.ab) * 100,
     hr: (p.hr / p.ab) * 100,
   };
 }
