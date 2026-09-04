@@ -583,7 +583,7 @@ const HOME_ADVANTAGE = 0.024; // % histórico real de ventaja de jugar de local 
 // significa que el nombre es real (confirmado como as actual del equipo) pero
 // no encontramos su ERA numérico exacto de esta temporada en esta sesión —
 // en ese caso el modelo usa el promedio de liga (neutral) para no inventar
-// una cifra, y la interfaz lo muestra como "ERA no confirmado".
+// una cifra, y la interfaz lo muestra como "FIP/ERA no confirmado".
 let PITCHERS = {
   BAL: { name: "Brandon Young", hand: "R", era: 3.33, eraConfirmed: true },
   BOS: { name: "Sonny Gray", hand: "R", era: 2.79, eraConfirmed: true },
@@ -1227,7 +1227,7 @@ function TodayGamesHeader() {
               <div className="text-[11px]" style={{ color: "#8FA599" }}>
                 {selectedGame.awayPitcher.hand === "L" ? "Zurdo" : selectedGame.awayPitcher.hand === "R" ? "Derecho" : "Mano no confirmada"} ·{" "}
                 <b style={{ color: selectedGame.awayPitcher.era != null ? "#FFB627" : "#8FA599" }}>
-                  {selectedGame.awayPitcher.era != null ? `${selectedGame.awayPitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}
+                  {selectedGame.awayPitcher.era != null ? `${selectedGame.awayPitcher.era.toFixed(2)} FIP/ERA` : "FIP/ERA no confirmado"}
                 </b>
               </div>
             </div>
@@ -1237,7 +1237,7 @@ function TodayGamesHeader() {
               <div className="text-[11px]" style={{ color: "#8FA599" }}>
                 {selectedGame.homePitcher.hand === "L" ? "Zurdo" : selectedGame.homePitcher.hand === "R" ? "Derecho" : "Mano no confirmada"} ·{" "}
                 <b style={{ color: selectedGame.homePitcher.era != null ? "#FFB627" : "#8FA599" }}>
-                  {selectedGame.homePitcher.era != null ? `${selectedGame.homePitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}
+                  {selectedGame.homePitcher.era != null ? `${selectedGame.homePitcher.era.toFixed(2)} FIP/ERA` : "FIP/ERA no confirmado"}
                 </b>
               </div>
             </div>
@@ -2479,7 +2479,7 @@ export default function DiamondStats({ onBackToMenu }) {
           </select>
           {oppTeam && (
             <span className="text-[11px]" style={{ color: "#8FA599" }}>
-              Abridor: <b style={{ color: "#EDEAE1" }}>{PITCHERS[oppTeam].name}</b> · {PITCHERS[oppTeam].hand === "L" ? "zurdo" : PITCHERS[oppTeam].hand === "R" ? "derecho" : "mano no confirmada"} · {PITCHERS[oppTeam].eraConfirmed ? `${PITCHERS[oppTeam].era.toFixed(2)} ERA` : "ERA no confirmado"}
+              Abridor: <b style={{ color: "#EDEAE1" }}>{PITCHERS[oppTeam].name}</b> · {PITCHERS[oppTeam].hand === "L" ? "zurdo" : PITCHERS[oppTeam].hand === "R" ? "derecho" : "mano no confirmada"} · {PITCHERS[oppTeam].eraConfirmed ? `${PITCHERS[oppTeam].era.toFixed(2)} FIP/ERA` : "FIP/ERA no confirmado"}
             </span>
           )}
         </div>
@@ -2599,7 +2599,7 @@ function HitProbabilities({ player, pitcher, todaysDayNight }) {
               className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
               style={{ background: p.favorable ? "#1A362A" : "#3A1E20", color: p.favorable ? "#FFB627" : "#E38A8E" }}
             >
-              vs. {pitcher.name} ({pitcher.eraConfirmed ? `${pitcher.era.toFixed(2)} ERA` : "ERA no confirmado"}) · {p.favorable ? "ventaja" : "desventaja"} de platoon {p.usedRealSplit ? "(split real)" : "(promedio liga)"}
+              vs. {pitcher.name} ({pitcher.eraConfirmed ? `${pitcher.era.toFixed(2)} FIP/ERA` : "FIP/ERA no confirmado"}) · {p.favorable ? "ventaja" : "desventaja"} de platoon {p.usedRealSplit ? "(split real)" : "(promedio liga)"}
             </div>
           )}
           {p.usedDayNightSplit && (
@@ -2636,7 +2636,7 @@ function HitProbabilities({ player, pitcher, todaysDayNight }) {
           ? `Probabilidad de que ocurra al menos una vez en el juego, combinando su tasa real por turno con su promedio real de ${perGame.abPerGame.toFixed(1)} turnos al bate por juego esta temporada (${player.ab} AB en ${player.g} juegos).`
           : "Probabilidad de un turno al bate individual, directo de sus conteos reales de la temporada."}
         {pitcher
-          ? ` Cruzado con el abridor real de hoy: ${p.usedRealSplit ? "su split REAL contra esa mano esta temporada" : "el ajuste de platoon genérico de liga (no tiene muestra suficiente de su split real todavía)"} + su ERA ${pitcher.eraConfirmed ? `actual de ${pitcher.era.toFixed(2)}` : "(sin confirmar esta sesión, se usa el promedio de liga como neutral)"} vs. el promedio de liga (~4.00). ${p.usedRealSplit ? "No es contra este pitcher específico, es su split contra pitchers de esa mano en general." : ""}`
+          ? ` Cruzado con el abridor real de hoy: ${p.usedRealSplit ? "su split REAL contra esa mano esta temporada" : "el ajuste de platoon genérico de liga (no tiene muestra suficiente de su split real todavía)"} + su FIP/ERA ${pitcher.eraConfirmed ? `actual de ${pitcher.era.toFixed(2)} (70% FIP + 30% ERA, más predictivo que ERA solo)` : "(sin confirmar esta sesión, se usa el promedio de liga como neutral)"} vs. el promedio de liga (~4.00). ${p.usedRealSplit ? "No es contra este pitcher específico, es su split contra pitchers de esa mano en general." : ""}`
           : " Elige el rival de hoy arriba para cruzar estas estadísticas con su abridor real."}
       </p>
     </div>
