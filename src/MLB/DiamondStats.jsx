@@ -300,14 +300,18 @@ async function computeFullHomeWinProb(game) {
   const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + homeRoadAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj + weatherAdj));
 
   // ---- Corrección de calibración real ----
-  // Con 143 predicciones reales comparadas en Precisión, se encontró que
-  // el modelo estaba sobreconfiado específicamente en partidos parejos
-  // (30-70% de confianza): decía 54-64% cuando en la realidad ganaba
-  // 39-53% de las veces. En 70%+ SÍ estaba bien calibrado, así que solo
-  // se suaviza la zona donde hay evidencia real del problema — reduce a
-  // la mitad el "exceso" de confianza respecto al 50%, sin invertir la
-  // dirección ni tocar los rangos que ya funcionan bien.
-  if (clamped > 0.3 && clamped < 0.7) {
+  // Con 143 predicciones reales se encontró sobreconfianza en 30-70% de
+  // confianza, y se corrigió solo esa zona (en ese momento, 70%+ parecía
+  // bien calibrado, pero con muestra chica de apenas 27 casos).
+  //
+  // Con 300 predicciones reales (más factores agregados desde entonces:
+  // clima, récord casa/ruta, fatiga de cerrador, FIP/ERA), la evidencia
+  // ya NO sostiene eso — 70-80% mostró -17.5pp, 80-90% mostró -22.4pp,
+  // 90%+ mostró -14.6pp, todos sobreconfiados de verdad. Probablemente
+  // por acumular varios factores que tienden a apuntar en la misma
+  // dirección para un equipo ya favorito, compensando entre sí más de
+  // lo que debieran. Se extiende la misma corrección a todo el rango.
+  if (clamped > 0.3 && clamped < 0.92) {
     return 0.5 + (clamped - 0.5) * 0.5;
   }
   return clamped;
@@ -1782,7 +1786,7 @@ function AccuracyView() {
   // 2026) — confirmada por el primer lote de predicciones nuevas tras
   // subir el cambio. Sirve para comparar limpio, sin mezclar viejo y
   // nuevo en el mismo promedio.
-  const CALIBRATION_FIX_DATE = "2026-08-25";
+  const CALIBRATION_FIX_DATE = "2026-09-05";
   const [onlyRecent, setOnlyRecent] = useState(false);
 
   const load = (recentOnly) => {
