@@ -311,6 +311,7 @@ async function computeFullHomeWinProb(game) {
   // por acumular varios factores que tienden a apuntar en la misma
   // dirección para un equipo ya favorito, compensando entre sí más de
   // lo que debieran. Se extiende la misma corrección a todo el rango.
+  console.log(`[DIAGNÓSTICO] ${game.awayCode} @ ${game.homeCode} — valor crudo antes de corregir: ${clamped}`);
   if (clamped > 0.3 && clamped <= 0.92) {
     return 0.5 + (clamped - 0.5) * 0.5;
   }
