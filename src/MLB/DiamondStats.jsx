@@ -369,15 +369,20 @@ async function computeTodaysPicks() {
     .sort((a, b) => b.seasonProb - a.seasonProb)
     .slice(0, 15);
 
+  // BABIP y forma reciente solo para los 15 candidatos YA filtrados —
+  // no para el roster completo de todos los equipos jugando hoy, eso
+  // hacía muy lento a Picks del día.
   const withRecentForm = await Promise.all(
-    seasonRanked.map(({ player, seasonProb, opposingPitcher, dayNight }) =>
-      player.id
-        ? fetch(`${BACKEND_URL}/api/player/${player.id}/streak`)
-            .then((r) => r.json())
-            .then((data) => ({ player, seasonProb, recentAvg: data.recentAvg, recentGames: data.recentGames, opposingPitcher, dayNight }))
-            .catch(() => ({ player, seasonProb, recentAvg: null, recentGames: 0, opposingPitcher, dayNight }))
-        : Promise.resolve({ player, seasonProb, recentAvg: null, recentGames: 0, opposingPitcher, dayNight })
-    )
+    seasonRanked.map(async ({ player, seasonProb, opposingPitcher, dayNight }) => {
+      if (!player.id) return { player, seasonProb, recentAvg: null, recentGames: 0, opposingPitcher, dayNight };
+      const babipParams = new URLSearchParams({ atBats: player.ab, hits: player.h, homeRuns: player.hr, strikeOuts: player.strikeOuts ?? 0 });
+      const [streakData, babipData] = await Promise.all([
+        fetch(`${BACKEND_URL}/api/player/${player.id}/streak`).then((r) => r.json()).catch(() => ({ recentAvg: null, recentGames: 0 })),
+        fetch(`${BACKEND_URL}/api/player/${player.id}/babip-adjusted?${babipParams}`).then((r) => r.json()).catch(() => ({ babipAdjustedAvg: null })),
+      ]);
+      player.babipAdjustedAvg = babipData.babipAdjustedAvg;
+      return { player, seasonProb, recentAvg: streakData.recentAvg, recentGames: streakData.recentGames, opposingPitcher, dayNight };
+    })
   );
   // Mezcla real: con 5+ juegos recientes de muestra, su forma actual pesa
   // mitad y mitad contra su probabilidad de temporada YA ajustada por el
@@ -395,8 +400,10 @@ async function computeTodaysPicks() {
   // Sencillos: mismo principio de temporada ajustada por el pitcher rival
   // de hoy — sin mezclar con "forma reciente" porque esa solo existe para
   // hit en general (cualquier tipo), no específica de sencillos, y
-  // mezclarla igual sería impreciso.
-  const topSingles = allHitters
+  // mezclarla igual sería impreciso. El ajuste de BABIP SÍ se aplica,
+  // pero solo a los 15 candidatos ya filtrados por temporada — igual
+  // que Hit, para no volver a hacer lento a Picks del día.
+  const singlesSeasonRanked = allHitters
     .map((p) => {
       const g = gameByCode[p.team];
       let opposingPitcher = null;
@@ -406,8 +413,34 @@ async function computeTodaysPicks() {
         opposingPitcher = p.team === g.homeCode ? pitcherFor(g.awayPitcher) : pitcherFor(g.homePitcher);
       }
       const gp = gameProbabilities(p, opposingPitcher, dayNight);
-      return { player: p, prob: gp.single };
+      return { player: p, seasonProb: gp.single, opposingPitcher, dayNight };
     })
+    .sort((a, b) => b.seasonProb - a.seasonProb)
+    .slice(0, 15);
+
+  const topSingles = (
+    await Promise.all(
+      singlesSeasonRanked.map(async ({ player, seasonProb, opposingPitcher, dayNight }) => {
+        if (!player.id || player.babipAdjustedAvg !== undefined) {
+          // Ya se consultó antes (mismo jugador top también en Hit) — se
+          // reutiliza sin volver a pedirlo.
+          if (player.babipAdjustedAvg != null) {
+            const gp = gameProbabilities(player, opposingPitcher, dayNight);
+            return { player, prob: gp.single };
+          }
+          return { player, prob: seasonProb };
+        }
+        const babipParams = new URLSearchParams({ atBats: player.ab, hits: player.h, homeRuns: player.hr, strikeOuts: player.strikeOuts ?? 0 });
+        const babipData = await fetch(`${BACKEND_URL}/api/player/${player.id}/babip-adjusted?${babipParams}`)
+          .then((r) => r.json())
+          .catch(() => ({ babipAdjustedAvg: null }));
+        player.babipAdjustedAvg = babipData.babipAdjustedAvg;
+        if (player.babipAdjustedAvg == null) return { player, prob: seasonProb };
+        const gp = gameProbabilities(player, opposingPitcher, dayNight);
+        return { player, prob: gp.single };
+      })
+    )
+  )
     .sort((a, b) => b.prob - a.prob)
     .slice(0, 3);
 
@@ -1050,6 +1083,15 @@ function TodayGamesHeader() {
         // muestra mínima, para no dejar que 1-2 juegos distorsionen todo).
         const combined = await Promise.all(
           [...homeBatters, ...awayBatters].map(async (p) => {
+            // Ajuste real de BABIP, bajo demanda — solo para estos
+            // bateadores específicos del partido de hoy, no el roster
+            // completo de ambos equipos.
+            const babipParams = new URLSearchParams({ atBats: p.ab, hits: p.h, homeRuns: p.hr, strikeOuts: p.strikeOuts ?? 0 });
+            const babip = await fetch(`${BACKEND_URL}/api/player/${p.id}/babip-adjusted?${babipParams}`)
+              .then((r) => r.json())
+              .catch(() => ({ babipAdjustedAvg: null }));
+            p.babipAdjustedAvg = babip.babipAdjustedAvg;
+
             const gp = gameProbabilities(p, p.pitcher, game.dayNight);
             const isHomeBatter = p.team === game.homeCode;
             const opposingTeamCode = isHomeBatter ? game.awayCode : game.homeCode;
