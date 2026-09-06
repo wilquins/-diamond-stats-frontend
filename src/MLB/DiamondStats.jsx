@@ -311,7 +311,7 @@ async function computeFullHomeWinProb(game) {
   // por acumular varios factores que tienden a apuntar en la misma
   // dirección para un equipo ya favorito, compensando entre sí más de
   // lo que debieran. Se extiende la misma corrección a todo el rango.
-  if (clamped > 0.3 && clamped < 0.92) {
+  if (clamped > 0.3 && clamped <= 0.92) {
     return 0.5 + (clamped - 0.5) * 0.5;
   }
   return clamped;
