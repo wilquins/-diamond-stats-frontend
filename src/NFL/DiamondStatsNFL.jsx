@@ -99,7 +99,6 @@ async function computeNflWinProb(home, away, weather) {
   }
 
   const prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj + homeRoadAdj + weatherAdj;
-  console.log(`[DIAGNÓSTICO NFL] home.winPercent=${home.winPercent} away.winPercent=${away.winPercent} home.pointsFor=${home.pointsFor} home.pointsAgainst=${home.pointsAgainst} baseProb=${baseProb} prob(antes de tope)=${prob}`);
   return { prob: Math.min(0.92, Math.max(0.08, prob)), diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h, homeHA, awayHA };
 }
 
