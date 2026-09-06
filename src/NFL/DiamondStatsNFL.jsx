@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 
 const BACKEND_URL = "https://diamond-stats-backend.onrender.com";
 
-// ---- Modelo de predicción — Fase 5 ----
+// ---- Modelo de predicción — Fase 6 ----
 // Mismo principio de Log5 que usamos en MLB, adaptado a NFL.
 function log5(pctA, pctB) {
   const denom = pctA + pctB - 2 * pctA * pctB;
@@ -25,7 +25,20 @@ const NFL_HOME_ADVANTAGE = 0.032;
 // condiciones, tiene una ventaja leve real en esos casos.
 async function computeNflWinProb(home, away, weather) {
   if (!home || !away) return null;
-  const baseProb = log5(home.winPercent ?? 0.5, away.winPercent ?? 0.5);
+
+  // Expectativa Pitagórica real de NFL (exponente ~2.37, distinto al de
+  // MLB ~1.83, pero mismo principio real de Bill James): mide la fuerza
+  // real de un equipo por sus puntos anotados y permitidos, no por su
+  // récord de victorias, que puede tener suerte real mezclada en juegos
+  // cerrados. Mezclado 70% Pitagórico + 30% récord real — mismo
+  // principio que ya usamos en MLB hoy.
+  const pythWinPct = (team) => {
+    if (!team.pointsFor || !team.pointsAgainst || team.pointsFor <= 0 || team.pointsAgainst <= 0) return team.winPercent ?? 0.5;
+    const exp = 2.37;
+    const pyth = Math.pow(team.pointsFor, exp) / (Math.pow(team.pointsFor, exp) + Math.pow(team.pointsAgainst, exp));
+    return pyth * 0.7 + (team.winPercent ?? 0.5) * 0.3;
+  };
+  const baseProb = log5(pythWinPct(home), pythWinPct(away));
 
   const gamesHome = home.wins + home.losses + home.ties;
   const gamesAway = away.wins + away.losses + away.ties;
@@ -471,7 +484,7 @@ function GameDetail({ game, onBack }) {
         <>
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-              Probabilidad de ganar (Log5 + localía + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima)
+              Probabilidad de ganar (Log5 con Expectativa Pitagórica + localía + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima)
             </div>
             <div className="space-y-2.5">
               <div>
@@ -730,7 +743,7 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full" style={{ background: "#C8393E" }} />
             <span className="text-[11px] tracking-[0.25em] uppercase" style={{ color: "#8FA599", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
-              NFL Analytics — Fase 5
+              NFL Analytics — Fase 6
             </span>
             {onBackToMenu && (
               <button
@@ -811,7 +824,7 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
 
         {!selectedGame && (
           <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
-            Fase 5: probabilidad real con 6 factores (Log5 + ventaja de casa + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima adverso), más Over/Under con su propio backtesting. Pendiente: identificar al QB titular real.
+            Fase 6: probabilidad real con Expectativa Pitagórica (puntos anotados/permitidos, más predictiva que el récord real) + ventaja de casa + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima adverso, más Over/Under con su propio backtesting. Pendiente: identificar al QB titular real.
           </p>
         )}
       </div>
