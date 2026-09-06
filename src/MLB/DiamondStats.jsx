@@ -2265,7 +2265,22 @@ export default function DiamondStats({ onBackToMenu }) {
         for (const t of data.teams) {
           const code = TEAM_ID_TO_CODE[t.teamId];
           if (code && TEAM_RECORDS[code]) {
-            TEAM_RECORDS[code] = { name: t.name, w: t.w, l: t.l, wpct: t.wpct };
+            // Expectativa Pitagórica real (Bill James, exponente 1.83,
+            // el valor moderno validado — no el 2.0 original): mide la
+            // fuerza real de un equipo por sus carreras anotadas y
+            // permitidas, no por su récord de victorias, que puede
+            // tener suerte real mezclada (juegos de una carrera
+            // ganados/perdidos por azar). Evidencia académica real
+            // confirma que predice mejor el futuro que el récord real
+            // mismo. Se mezcla 70% Pitagórico + 30% real — mismo
+            // principio que FIP/ERA y BABIP de hoy.
+            let wpct = t.wpct;
+            if (t.runsScored != null && t.runsAllowed != null && t.runsScored > 0 && t.runsAllowed > 0) {
+              const exp = 1.83;
+              const pythWpct = Math.pow(t.runsScored, exp) / (Math.pow(t.runsScored, exp) + Math.pow(t.runsAllowed, exp));
+              wpct = pythWpct * 0.7 + t.wpct * 0.3;
+            }
+            TEAM_RECORDS[code] = { name: t.name, w: t.w, l: t.l, wpct };
           }
         }
         setLiveStatus("en-vivo");
