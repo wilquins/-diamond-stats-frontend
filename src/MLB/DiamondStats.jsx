@@ -300,22 +300,18 @@ async function computeFullHomeWinProb(game) {
   const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + homeRoadAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj + weatherAdj));
 
   // ---- Corrección de calibración real ----
-  // Con 143 predicciones reales se encontró sobreconfianza en 30-70% de
-  // confianza, y se corrigió solo esa zona (en ese momento, 70%+ parecía
-  // bien calibrado, pero con muestra chica de apenas 27 casos).
+  // Con predicciones reales acumuladas se encontró sobreconfianza real
+  // en partidos con mucha ventaja para un lado — se corrige comprimiendo
+  // hacia el 50% (mitad del "exceso" de confianza).
   //
-  // Con 300 predicciones reales (más factores agregados desde entonces:
-  // clima, récord casa/ruta, fatiga de cerrador, FIP/ERA), la evidencia
-  // ya NO sostiene eso — 70-80% mostró -17.5pp, 80-90% mostró -22.4pp,
-  // 90%+ mostró -14.6pp, todos sobreconfiados de verdad. Probablemente
-  // por acumular varios factores que tienden a apuntar en la misma
-  // dirección para un equipo ya favorito, compensando entre sí más de
-  // lo que debieran. Se extiende la misma corrección a todo el rango.
-  console.log(`[DIAGNÓSTICO] ${game.awayCode} @ ${game.homeCode} — valor crudo antes de corregir: ${clamped}`);
-  if (clamped > 0.3 && clamped <= 0.92) {
-    return 0.5 + (clamped - 0.5) * 0.5;
-  }
-  return clamped;
+  // La corrección aplica a TODO el rango, sin condición — es simétrica
+  // y segura: en clamped=0.5 no hace nada (0.5+(0.5-0.5)*0.5=0.5), y en
+  // los extremos (0.08 y 0.92) comprime hacia 0.29 y 0.71 por igual. Un
+  // bug anterior (clamped > 0.3) solo corregía cuando el LOCAL era muy
+  // favorito, dejando sin corregir los casos donde el VISITANTE era muy
+  // favorito (clamped bajo, como 0.16) — encontrado real con MIL @ CIN,
+  // donde Milwaukee (visitante) mostraba 83.9% crudo sin corregir.
+  return 0.5 + (clamped - 0.5) * 0.5;
 }
 
 // Calcula los picks reales del día — 3 bateadores y 3 equipos — con la
