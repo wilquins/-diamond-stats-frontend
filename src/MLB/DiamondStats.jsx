@@ -189,10 +189,24 @@ async function computeFullHomeWinProb(game) {
   if (!recHome || !recAway || !stadium) return null;
 
   const baseProb = log5(recHome.wpct, recAway.wpct);
+
+  // Platoon real del equipo: OPS real de cada equipo contra la mano
+  // específica del abridor rival de hoy, comparado contra su propio OPS
+  // de temporada — no una suposición genérica basada en el roster.
+  const [homePlatoonData, awayPlatoonData] = await Promise.all([
+    game.awayPitcher?.hand
+      ? fetch(`${BACKEND_URL}/api/team/${game.homeCode}/platoon-split?hand=${game.awayPitcher.hand}`).then((r) => r.json()).catch(() => ({ opsDelta: null }))
+      : Promise.resolve({ opsDelta: null }),
+    game.homePitcher?.hand
+      ? fetch(`${BACKEND_URL}/api/team/${game.awayCode}/platoon-split?hand=${game.homePitcher.hand}`).then((r) => r.json()).catch(() => ({ opsDelta: null }))
+      : Promise.resolve({ opsDelta: null }),
+  ]);
+
   const { prob: baseHomeWinProb } = adjustedHomeProb({
     baseProb, stadium, wind: "neutro", temp: "templado",
     home: game.homeCode, away: game.awayCode,
     homePitcher: game.homePitcher, awayPitcher: game.awayPitcher,
+    homeRealPlatoonDelta: homePlatoonData.opsDelta, awayRealPlatoonDelta: awayPlatoonData.opsDelta,
   });
 
   const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
@@ -741,7 +755,7 @@ function platoonEdge(teamCode, opposingPitcherHand) {
 // cada equipo. Día/noche y día de la semana se muestran como contexto pero
 // NO mueven el número — la evidencia de su efecto a nivel de equipo es
 // demasiado débil para justificar un ajuste numérico honesto.
-function adjustedHomeProb({ baseProb, stadium, wind, temp, home, away, homePitcher: homePitcherArg, awayPitcher: awayPitcherArg }) {
+function adjustedHomeProb({ baseProb, stadium, wind, temp, home, away, homePitcher: homePitcherArg, awayPitcher: awayPitcherArg, homeRealPlatoonDelta, awayRealPlatoonDelta }) {
   let effectiveRunFactor = stadium.runFactor;
   if (!stadium.roofed) {
     if (wind === "out") effectiveRunFactor += stadium.windSensitive ? 0.08 : 0.04;
@@ -758,8 +772,13 @@ function adjustedHomeProb({ baseProb, stadium, wind, temp, home, away, homePitch
   // caemos de vuelta al objeto compartido como antes.
   const homePitcher = homePitcherArg || PITCHERS[home];
   const awayPitcher = awayPitcherArg || PITCHERS[away];
-  const homeBattersEdge = platoonEdge(home, awayPitcher.hand); // bateo local vs. abridor visitante
-  const awayBattersEdge = platoonEdge(away, homePitcher.hand); // bateo visitante vs. abridor local
+  // Platoon real del EQUIPO: cuando tenemos su OPS real esta temporada
+  // contra esa mano específica (no una suposición genérica basada solo
+  // en cuántos bateadores zurdos/derechos tiene el roster), se usa esa
+  // evidencia real directamente. Si no está disponible, cae de vuelta
+  // a la suposición genérica de antes.
+  const homeBattersEdge = homeRealPlatoonDelta != null ? homeRealPlatoonDelta : platoonEdge(home, awayPitcher.hand);
+  const awayBattersEdge = awayRealPlatoonDelta != null ? awayRealPlatoonDelta : platoonEdge(away, homePitcher.hand);
   const platoonAdjustment = (homeBattersEdge - awayBattersEdge) * 0.5;
 
   const homeEraForCalc = homePitcher.era != null ? homePitcher.era : LEAGUE_AVG_ERA;
@@ -1328,7 +1347,7 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 (con Expectativa Pitagórica) + localía + parque + platoon real de equipo + ERA (FIP/ERA) + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso)</div>
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -1788,7 +1807,7 @@ function DailyPicks() {
           Mayor probabilidad de ganar hoy
         </h2>
         {loadStatus === "cargando" && (
-          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 12 factores…</p>
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 12 factores, ahora con evidencia real en más de ellos…</p>
         )}
         {loadStatus === "listo" && (
           <div className="space-y-3">
@@ -1809,7 +1828,7 @@ function DailyPicks() {
           </div>
         )}
         <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-          Usa el mismo modelo completo de 12 factores que "Juegos de hoy" (Log5 + localía + parque + platoon + ERA + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
+          Usa el mismo modelo completo de 12 factores, ahora con evidencia real en más de ellos que "Juegos de hoy" (Log5 (con Expectativa Pitagórica) + localía + parque + platoon real de equipo + ERA (FIP/ERA) + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
         </p>
       </div>
     </div>
