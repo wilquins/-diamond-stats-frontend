@@ -1255,29 +1255,15 @@ function TodayGamesHeader() {
     });
   }, [gameHitters]);
 
-  // Guarda automáticamente la predicción del partido que el usuario está
-  // viendo en Juegos de hoy — a diferencia del Predictor (que tenía fijo
-  // un solo partido de referencia), esto funciona para CUALQUIER partido
-  // real de hoy que se abra, cambiando día a día de verdad.
-  useEffect(() => {
-    if (!selectedGame) return;
-    const recHome = TEAM_RECORDS[selectedGame.homeCode];
-    const recAway = TEAM_RECORDS[selectedGame.awayCode];
-    const stadium = STADIUMS[selectedGame.homeCode];
-    if (!recHome || !recAway || !stadium) return;
-    const baseProb = log5(recHome.wpct, recAway.wpct);
-    const { prob: homeWinProb } = adjustedHomeProb({
-      baseProb, stadium, wind: "neutro", temp: "templado",
-      home: selectedGame.homeCode, away: selectedGame.awayCode,
-      homePitcher: selectedGame.homePitcher, awayPitcher: selectedGame.awayPitcher,
-    });
-    const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-    fetch(`${BACKEND_URL}/api/predictions/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ game_date: gameDate, home_code: selectedGame.homeCode, away_code: selectedGame.awayCode, home_win_prob: homeWinProb }),
-    }).catch(() => {});
-  }, [selectedGame]);
+  // NOTA: el guardado automático real de este partido ya sucede en
+  // selectGame(), usando computeFullHomeWinProb (el cálculo COMPLETO de
+  // 12 factores + corrección de calibración) — había un segundo useEffect
+  // aquí, más viejo, que guardaba con un cálculo mucho más simple (sin
+  // bullpen, sin fatiga de cerrador, sin récord casa/ruta, sin cara a
+  // cara, sin descanso, sin clima, y SIN la corrección de calibración) al
+  // MISMO destino. Se eliminó por completo — era un duplicado real que
+  // podía contaminar Precisión con datos del cálculo viejo e incompleto,
+  // dependiendo de cuál de los dos guardara primero.
 
   if (status === "cargando") {
     return <div className="mb-6 text-[11px]" style={{ color: "#8FA599" }}>Buscando juegos de hoy…</div>;
