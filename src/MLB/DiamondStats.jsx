@@ -373,40 +373,85 @@ async function computeTodaysPicks() {
       const g = gameByCode[p.team];
       let opposingPitcher = null;
       let dayNight = null;
+      let opposingTeamCode = null;
+      let opposingPitcherId = null;
+      let isHomeBatter = null;
       if (g) {
         dayNight = g.dayNight;
-        opposingPitcher = p.team === g.homeCode ? pitcherFor(g.awayPitcher) : pitcherFor(g.homePitcher);
+        isHomeBatter = p.team === g.homeCode;
+        opposingPitcher = isHomeBatter ? pitcherFor(g.awayPitcher) : pitcherFor(g.homePitcher);
+        opposingTeamCode = isHomeBatter ? g.awayCode : g.homeCode;
+        opposingPitcherId = isHomeBatter ? g.awayPitcher?.id : g.homePitcher?.id;
       }
       const gp = gameProbabilities(p, opposingPitcher, dayNight);
-      return { player: p, seasonProb: gp.hit, opposingPitcher, dayNight };
+      return { player: p, seasonProb: gp.hit, opposingPitcher, dayNight, opposingTeamCode, opposingPitcherId, isHomeBatter };
     })
     .sort((a, b) => b.seasonProb - a.seasonProb)
     .slice(0, 15);
 
-  // BABIP y forma reciente solo para los 15 candidatos YA filtrados —
-  // no para el roster completo de todos los equipos jugando hoy, eso
-  // hacía muy lento a Picks del día.
+  // BABIP, forma reciente, vs-equipo específico, y vs-pitcher específico
+  // (carrera) — solo para los 15 candidatos YA filtrados, no para el
+  // roster completo de todos los equipos jugando hoy, eso hacía muy
+  // lento a Picks del día. Con esto, Picks del día queda con el MISMO
+  // nivel de detalle real que Juegos de hoy — no solo "el mejor de la
+  // MLB", sino el mejor tomando en cuenta el rival específico de hoy.
   const withRecentForm = await Promise.all(
-    seasonRanked.map(async ({ player, seasonProb, opposingPitcher, dayNight }) => {
+    seasonRanked.map(async ({ player, seasonProb, opposingPitcher, dayNight, opposingTeamCode, opposingPitcherId, isHomeBatter }) => {
       if (!player.id) return { player, seasonProb, recentAvg: null, recentGames: 0, opposingPitcher, dayNight };
       const babipParams = new URLSearchParams({ atBats: player.ab, hits: player.h, homeRuns: player.hr, strikeOuts: player.strikeOuts ?? 0 });
-      const [streakData, babipData] = await Promise.all([
+      const splitsParams = new URLSearchParams({ opposingTeamCode: opposingTeamCode || "" });
+      if (opposingPitcherId) splitsParams.set("opposingPitcherId", opposingPitcherId);
+      const [streakData, babipData, splitsData] = await Promise.all([
         fetch(`${BACKEND_URL}/api/player/${player.id}/streak`).then((r) => r.json()).catch(() => ({ recentAvg: null, recentGames: 0 })),
         fetch(`${BACKEND_URL}/api/player/${player.id}/babip-adjusted?${babipParams}`).then((r) => r.json()).catch(() => ({ babipAdjustedAvg: null })),
+        opposingTeamCode
+          ? fetch(`${BACKEND_URL}/api/player/${player.id}/matchup-splits?${splitsParams}`).then((r) => r.json()).catch(() => null)
+          : Promise.resolve(null),
       ]);
       player.babipAdjustedAvg = babipData.babipAdjustedAvg;
-      return { player, seasonProb, recentAvg: streakData.recentAvg, recentGames: streakData.recentGames, opposingPitcher, dayNight };
+      player.matchupSplits = splitsData; // cacheado — Sencillos lo reutiliza si es el mismo jugador
+      return {
+        player, seasonProb, recentAvg: streakData.recentAvg, recentGames: streakData.recentGames,
+        opposingPitcher, dayNight, opposingTeamCode, isHomeBatter, splits: splitsData,
+      };
     })
   );
   // Mezcla real: con 5+ juegos recientes de muestra, su forma actual pesa
   // mitad y mitad contra su probabilidad de temporada YA ajustada por el
-  // pitcher rival real de hoy.
+  // pitcher rival real de hoy. Después, se afina con vs-equipo específico
+  // y vs-pitcher específico (carrera) — mismo peso que ya usa Juegos de
+  // hoy, para que Picks del día no sea "el mejor de la MLB" sino el
+  // mejor tomando en cuenta a quién enfrenta hoy específicamente.
   const topHitters = withRecentForm
-    .map(({ player, seasonProb, recentAvg, recentGames, opposingPitcher, dayNight }) => {
-      if (recentAvg == null || recentGames < 5) return { player, prob: seasonProb };
-      const seasonPerAb = matchupAdjustedProbs(player, opposingPitcher, dayNight).hit / 100;
-      const blendedPerAb = seasonPerAb * 0.5 + recentAvg * 0.5;
-      return { player, prob: toGameProbability(blendedPerAb * 100, player.ab / player.g) };
+    .map(({ player, seasonProb, recentAvg, recentGames, opposingPitcher, dayNight, isHomeBatter, splits }) => {
+      let prob;
+      if (recentAvg == null || recentGames < 5) {
+        prob = seasonProb;
+      } else {
+        const seasonPerAb = matchupAdjustedProbs(player, opposingPitcher, dayNight).hit / 100;
+        const blendedPerAb = seasonPerAb * 0.5 + recentAvg * 0.5;
+        prob = toGameProbability(blendedPerAb * 100, player.ab / player.g);
+      }
+
+      if (splits?.hit) {
+        const baseRate = prob / 100;
+        let weightedAdj = 0;
+        if (splits.hit.vsTeam && splits.hit.vsTeam.total >= 3) {
+          weightedAdj += (splits.hit.vsTeam.pct - baseRate) * 0.15;
+        }
+        if (splits.hit.vsPitcher && splits.hit.vsPitcher.atBats >= 3) {
+          const vsPitcherPerAb = splits.hit.vsPitcher.hits / splits.hit.vsPitcher.atBats;
+          const vsPitcherGameProb = toGameProbability(vsPitcherPerAb * 100, player.ab / player.g) / 100;
+          weightedAdj += (vsPitcherGameProb - baseRate) * 0.15;
+        }
+        const relevantSplit = isHomeBatter ? splits.hit.home : splits.hit.away;
+        if (relevantSplit && relevantSplit.total >= 3) {
+          weightedAdj += (relevantSplit.pct - baseRate) * 0.10;
+        }
+        prob = Math.min(95, Math.max(5, prob + weightedAdj * 100));
+      }
+
+      return { player, prob };
     })
     .sort((a, b) => b.prob - a.prob)
     .slice(0, 3);
@@ -422,36 +467,61 @@ async function computeTodaysPicks() {
       const g = gameByCode[p.team];
       let opposingPitcher = null;
       let dayNight = null;
+      let opposingTeamCode = null;
+      let opposingPitcherId = null;
+      let isHomeBatter = null;
       if (g) {
         dayNight = g.dayNight;
-        opposingPitcher = p.team === g.homeCode ? pitcherFor(g.awayPitcher) : pitcherFor(g.homePitcher);
+        isHomeBatter = p.team === g.homeCode;
+        opposingPitcher = isHomeBatter ? pitcherFor(g.awayPitcher) : pitcherFor(g.homePitcher);
+        opposingTeamCode = isHomeBatter ? g.awayCode : g.homeCode;
+        opposingPitcherId = isHomeBatter ? g.awayPitcher?.id : g.homePitcher?.id;
       }
       const gp = gameProbabilities(p, opposingPitcher, dayNight);
-      return { player: p, seasonProb: gp.single, opposingPitcher, dayNight };
+      return { player: p, seasonProb: gp.single, opposingPitcher, dayNight, opposingTeamCode, opposingPitcherId, isHomeBatter };
     })
     .sort((a, b) => b.seasonProb - a.seasonProb)
     .slice(0, 15);
 
+  const applyRealSplitsAdj = (baseProbPct, splits, statType, isHomeBatter, player) => {
+    const data = splits?.[statType];
+    if (!data) return baseProbPct;
+    const baseRate = baseProbPct / 100;
+    let weightedAdj = 0;
+    if (data.vsTeam && data.vsTeam.total >= 3) weightedAdj += (data.vsTeam.pct - baseRate) * 0.15;
+    if (data.vsPitcher && data.vsPitcher.atBats >= 3) {
+      const vsPitcherPerAb = data.vsPitcher.hits / data.vsPitcher.atBats;
+      const vsPitcherGameProb = toGameProbability(vsPitcherPerAb * 100, player.ab / player.g) / 100;
+      weightedAdj += (vsPitcherGameProb - baseRate) * 0.15;
+    }
+    const relevantSplit = isHomeBatter ? data.home : data.away;
+    if (relevantSplit && relevantSplit.total >= 3) weightedAdj += (relevantSplit.pct - baseRate) * 0.10;
+    return Math.min(95, Math.max(5, baseProbPct + weightedAdj * 100));
+  };
+
   const topSingles = (
     await Promise.all(
-      singlesSeasonRanked.map(async ({ player, seasonProb, opposingPitcher, dayNight }) => {
-        if (!player.id || player.babipAdjustedAvg !== undefined) {
+      singlesSeasonRanked.map(async ({ player, seasonProb, opposingPitcher, dayNight, opposingTeamCode, opposingPitcherId, isHomeBatter }) => {
+        if (!player.id) return { player, prob: seasonProb };
+        if (player.matchupSplits !== undefined) {
           // Ya se consultó antes (mismo jugador top también en Hit) — se
           // reutiliza sin volver a pedirlo.
-          if (player.babipAdjustedAvg != null) {
-            const gp = gameProbabilities(player, opposingPitcher, dayNight);
-            return { player, prob: gp.single };
-          }
-          return { player, prob: seasonProb };
+          const base = player.babipAdjustedAvg != null ? gameProbabilities(player, opposingPitcher, dayNight).single : seasonProb;
+          return { player, prob: applyRealSplitsAdj(base, player.matchupSplits, "single", isHomeBatter, player) };
         }
         const babipParams = new URLSearchParams({ atBats: player.ab, hits: player.h, homeRuns: player.hr, strikeOuts: player.strikeOuts ?? 0 });
-        const babipData = await fetch(`${BACKEND_URL}/api/player/${player.id}/babip-adjusted?${babipParams}`)
-          .then((r) => r.json())
-          .catch(() => ({ babipAdjustedAvg: null }));
+        const splitsParams = new URLSearchParams({ opposingTeamCode: opposingTeamCode || "" });
+        if (opposingPitcherId) splitsParams.set("opposingPitcherId", opposingPitcherId);
+        const [babipData, splitsData] = await Promise.all([
+          fetch(`${BACKEND_URL}/api/player/${player.id}/babip-adjusted?${babipParams}`).then((r) => r.json()).catch(() => ({ babipAdjustedAvg: null })),
+          opposingTeamCode
+            ? fetch(`${BACKEND_URL}/api/player/${player.id}/matchup-splits?${splitsParams}`).then((r) => r.json()).catch(() => null)
+            : Promise.resolve(null),
+        ]);
         player.babipAdjustedAvg = babipData.babipAdjustedAvg;
-        if (player.babipAdjustedAvg == null) return { player, prob: seasonProb };
-        const gp = gameProbabilities(player, opposingPitcher, dayNight);
-        return { player, prob: gp.single };
+        player.matchupSplits = splitsData;
+        const base = player.babipAdjustedAvg != null ? gameProbabilities(player, opposingPitcher, dayNight).single : seasonProb;
+        return { player, prob: applyRealSplitsAdj(base, splitsData, "single", isHomeBatter, player) };
       })
     )
   )
