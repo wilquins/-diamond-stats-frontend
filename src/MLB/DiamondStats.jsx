@@ -360,7 +360,31 @@ async function computeTodaysPicks() {
         .catch(() => [])
     )
   );
-  const allHitters = hitterResults.flat().filter((h) => h.ab >= 20 && teamsPlayingToday.has(h.team));
+  const allHittersRaw = hitterResults.flat().filter((h) => h.ab >= 20 && teamsPlayingToday.has(h.team));
+
+  // Alineación confirmada real, cuando ya está publicada — sin esto, un
+  // jugador que está descansando hoy (o lesionado, o no forma parte de
+  // la alineación de hoy) podía seguir apareciendo solo por tener
+  // buenos números de temporada. Si la alineación aún no se publica
+  // (normal horas antes del juego), se usa el roster completo como
+  // respaldo — mismo principio que ya usa Juegos de hoy.
+  const lineupResults = await Promise.all(
+    upcomingGames.map((g) =>
+      fetch(`${BACKEND_URL}/api/game/${g.gamePk}/lineup`).then((r) => r.json()).catch(() => ({ available: false }))
+    )
+  );
+  const confirmedLineupByTeam = {};
+  upcomingGames.forEach((g, i) => {
+    const lineup = lineupResults[i];
+    if (lineup.available) {
+      confirmedLineupByTeam[g.homeCode] = new Set((lineup.home || []).map((p) => p.name));
+      confirmedLineupByTeam[g.awayCode] = new Set((lineup.away || []).map((p) => p.name));
+    }
+  });
+  const allHitters = allHittersRaw.filter((h) => {
+    const confirmedSet = confirmedLineupByTeam[h.team];
+    return confirmedSet ? confirmedSet.has(h.name) : true;
+  });
 
   // Ahora sí toma en cuenta al pitcher rival REAL de cada bateador hoy
   // (mano + ERA), y si el juego es de día o de noche — igual que hace
