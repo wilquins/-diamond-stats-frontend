@@ -209,6 +209,22 @@ async function computeFullHomeWinProb(game) {
     homeRealPlatoonDelta: homePlatoonData.opsDelta, awayRealPlatoonDelta: awayPlatoonData.opsDelta,
   });
 
+  // Fuerza real de la alineación confirmada de HOY, comparada contra el
+  // promedio del roster completo — si un equipo tiene descansando a sus
+  // mejores bateadores hoy, es genuinamente más débil ese día
+  // específico, aunque su récord de temporada sea bueno. Solo se activa
+  // cuando la alineación ya está publicada (si no, no se puede saber).
+  let lineupStrengthAdj = 0;
+  if (game.gamePk) {
+    const [homeLineupData, awayLineupData] = await Promise.all([
+      fetch(`${BACKEND_URL}/api/team/${game.homeCode}/lineup-strength?gamePk=${game.gamePk}`).then((r) => r.json()).catch(() => ({ opsDelta: null })),
+      fetch(`${BACKEND_URL}/api/team/${game.awayCode}/lineup-strength?gamePk=${game.gamePk}`).then((r) => r.json()).catch(() => ({ opsDelta: null })),
+    ]);
+    if (homeLineupData.opsDelta != null && awayLineupData.opsDelta != null) {
+      lineupStrengthAdj = (homeLineupData.opsDelta - awayLineupData.opsDelta) * 0.5;
+    }
+  }
+
   const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
   const todayWd = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()];
   const winPct = (record) => {
@@ -311,7 +327,7 @@ async function computeFullHomeWinProb(game) {
     }
   }
 
-  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + homeRoadAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj + weatherAdj));
+  const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + homeRoadAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj + weatherAdj + lineupStrengthAdj));
 
   // ---- Corrección de calibración real ----
   // Con predicciones reales acumuladas se encontró sobreconfianza real
@@ -1427,7 +1443,7 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 (con Expectativa Pitagórica) + localía + parque + platoon real de equipo + ERA (FIP/ERA) + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 (con Expectativa Pitagórica) + localía + parque + platoon real de equipo + fuerza real de alineación confirmada + ERA (FIP/ERA) + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso)</div>
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
@@ -1887,7 +1903,7 @@ function DailyPicks() {
           Mayor probabilidad de ganar hoy
         </h2>
         {loadStatus === "cargando" && (
-          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 12 factores, ahora con evidencia real en más de ellos…</p>
+          <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con el modelo completo de 13 factores, ahora con evidencia real en más de ellos…</p>
         )}
         {loadStatus === "listo" && (
           <div className="space-y-3">
@@ -1908,7 +1924,7 @@ function DailyPicks() {
           </div>
         )}
         <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-          Usa el mismo modelo completo de 12 factores, ahora con evidencia real en más de ellos que "Juegos de hoy" (Log5 (con Expectativa Pitagórica) + localía + parque + platoon real de equipo + ERA (FIP/ERA) + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
+          Usa el mismo modelo completo de 13 factores, ahora con evidencia real en más de ellos que "Juegos de hoy" (Log5 (con Expectativa Pitagórica) + localía + parque + platoon real de equipo + fuerza real de alineación confirmada + ERA (FIP/ERA) + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso) para el rival real de hoy de cada equipo — no un rival promedio genérico.
         </p>
       </div>
     </div>
