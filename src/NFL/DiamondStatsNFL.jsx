@@ -563,26 +563,32 @@ function GameDetail({ game, onBack }) {
             </div>
           )}
 
-          {overUnder && (
-            <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-              <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-                Over/Under estimado · línea {overUnder.line} puntos
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.overProb >= overUnder.underProb ? "#1A362A" : "#0F251C" }}>
-                  <span style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD" }}>Over {overUnder.line}</span>
-                  <span className="font-bold tabular-nums" style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.overProb * 100).toFixed(1)}%</span>
-                </div>
-                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.underProb > overUnder.overProb ? "#1A362A" : "#0F251C" }}>
-                  <span style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD" }}>Under {overUnder.line}</span>
-                  <span className="font-bold tabular-nums" style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.underProb * 100).toFixed(1)}%</span>
-                </div>
-              </div>
-              <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-                Puntos totales esperados: {overUnder.expectedTotal.toFixed(1)} — combina el ataque y la defensa reales de ambos equipos esta temporada{weather?.roofed === false && (weather?.windMph > 15 || weather?.pop > 50 || weather?.tempF < 20) ? ", ya reducido por el clima adverso real de hoy" : ""}, pasado por una distribución normal (desviación estándar ~10 puntos, típica en NFL).
-              </p>
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+              Over/Under estimado{overUnder ? ` · línea ${overUnder.line} puntos` : ""}
             </div>
-          )}
+            {overUnder ? (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.overProb >= overUnder.underProb ? "#1A362A" : "#0F251C" }}>
+                    <span style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD" }}>Over {overUnder.line}</span>
+                    <span className="font-bold tabular-nums" style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.overProb * 100).toFixed(1)}%</span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.underProb > overUnder.overProb ? "#1A362A" : "#0F251C" }}>
+                    <span style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD" }}>Under {overUnder.line}</span>
+                    <span className="font-bold tabular-nums" style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.underProb * 100).toFixed(1)}%</span>
+                  </div>
+                </div>
+                <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
+                  Puntos totales esperados: {overUnder.expectedTotal.toFixed(1)} — combina el ataque y la defensa reales de ambos equipos esta temporada{weather?.roofed === false && (weather?.windMph > 15 || weather?.pop > 50 || weather?.tempF < 20) ? ", ya reducido por el clima adverso real de hoy" : ""}, pasado por una distribución normal (desviación estándar ~10 puntos, típica en NFL).
+                </p>
+              </>
+            ) : (
+              <p className="text-[11px]" style={{ color: "#5A7368" }}>
+                Sin datos suficientes todavía — uno de los dos equipos aún no ha jugado su primer partido real de esta temporada, así que no hay puntos anotados/permitidos reales con qué calcular un promedio.
+              </p>
+            )}
+          </div>
 
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
