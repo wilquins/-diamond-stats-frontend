@@ -341,7 +341,8 @@ async function computeFullHomeWinProb(game) {
   // favorito, dejando sin corregir los casos donde el VISITANTE era muy
   // favorito (clamped bajo, como 0.16) — encontrado real con MIL @ CIN,
   // donde Milwaukee (visitante) mostraba 83.9% crudo sin corregir.
-  return 0.5 + (clamped - 0.5) * 0.5;
+  const correctedProb = 0.5 + (clamped - 0.5) * 0.5;
+  return { prob: correctedProb, rawProb: clamped };
 }
 
 // Calcula los picks reales del día — 3 bateadores y 3 equipos — con la
@@ -583,19 +584,25 @@ async function computeTodaysPicks() {
   }
 
   const gameResults = await Promise.all(
-    uniqueGames.map((g) => computeFullHomeWinProb(g).then((homeWinProb) => ({ g, homeWinProb })).catch(() => ({ g, homeWinProb: null })))
+    uniqueGames.map((g) => computeFullHomeWinProb(g).then((result) => ({ g, result })).catch(() => ({ g, result: null })))
   );
   const teamCandidates = [];
-  for (const { g, homeWinProb } of gameResults) {
-    if (homeWinProb == null) continue;
+  for (const { g, result } of gameResults) {
+    if (result == null) continue;
+    const { prob: homeWinProb, rawProb: homeRawProb } = result;
     const awayWinProb = 1 - homeWinProb;
-    if (homeWinProb >= awayWinProb) {
-      teamCandidates.push({ code: g.homeCode, rec: TEAM_RECORDS[g.homeCode], prob: homeWinProb });
+    const awayRawProb = 1 - homeRawProb;
+    // El ORDEN usa el valor crudo (antes del techo de calibración) — así
+    // un equipo genuinamente más favorito no queda empatado en el
+    // techo (71.0%) con otro menos favorito que también llegó ahí. El %
+    // que se MUESTRA sigue siendo el corregido y honesto.
+    if (homeRawProb >= awayRawProb) {
+      teamCandidates.push({ code: g.homeCode, rec: TEAM_RECORDS[g.homeCode], prob: homeWinProb, rawProb: homeRawProb });
     } else {
-      teamCandidates.push({ code: g.awayCode, rec: TEAM_RECORDS[g.awayCode], prob: awayWinProb });
+      teamCandidates.push({ code: g.awayCode, rec: TEAM_RECORDS[g.awayCode], prob: awayWinProb, rawProb: awayRawProb });
     }
   }
-  const topTeams = teamCandidates.sort((a, b) => b.prob - a.prob).slice(0, 3);
+  const topTeams = teamCandidates.sort((a, b) => b.rawProb - a.rawProb).slice(0, 3);
 
   return { topHitters, topSingles, topTeams };
 }
@@ -1117,12 +1124,12 @@ function TodayGamesHeader() {
         const notStartedStates = new Set(["Scheduled", "Pre-Game", "Warmup", "Delayed Start", "Delayed"]);
         const gameDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
         for (const g of (data.games || []).filter((g) => notStartedStates.has(g.status))) {
-          computeFullHomeWinProb(g).then((homeWinProb) => {
-            if (homeWinProb == null) return;
+          computeFullHomeWinProb(g).then((result) => {
+            if (result == null) return;
             fetch(`${BACKEND_URL}/api/predictions/save`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ game_date: gameDate, home_code: g.homeCode, away_code: g.awayCode, home_win_prob: homeWinProb }),
+              body: JSON.stringify({ game_date: gameDate, home_code: g.homeCode, away_code: g.awayCode, home_win_prob: result.prob }),
             }).catch(() => {});
           });
           computeOverUnder(g).then((ou) => {
@@ -1154,7 +1161,8 @@ function TodayGamesHeader() {
     // mismo que se guarda para Precisión, sin que puedan desincronizarse.
     setComputedWinProb(null);
     setWinProbStatus("cargando");
-    computeFullHomeWinProb(game).then((prob) => {
+    computeFullHomeWinProb(game).then((result) => {
+      const prob = result?.prob ?? null;
       setComputedWinProb(prob);
       setWinProbStatus(prob != null ? "listo" : "error");
     });
