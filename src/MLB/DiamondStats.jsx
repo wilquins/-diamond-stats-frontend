@@ -1948,7 +1948,7 @@ function AccuracyView() {
   // 2026) — confirmada por el primer lote de predicciones nuevas tras
   // subir el cambio. Sirve para comparar limpio, sin mezclar viejo y
   // nuevo en el mismo promedio.
-  const CALIBRATION_FIX_DATE = "2026-09-05";
+  const CALIBRATION_FIX_DATE = "2026-09-15";
   const [onlyRecent, setOnlyRecent] = useState(false);
 
   const load = (recentOnly) => {
