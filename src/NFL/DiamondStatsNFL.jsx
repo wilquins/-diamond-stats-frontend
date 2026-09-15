@@ -334,6 +334,7 @@ function DayPicks() {
           const homeWins = r.prob >= 0.5;
           teamPicks.push({
             team: homeWins ? g.homeName : g.awayName,
+            teamCode: homeWins ? g.homeCode : g.awayCode,
             opponent: homeWins ? g.awayName : g.homeName,
             prob: Math.max(r.prob, 1 - r.prob),
           });
@@ -342,23 +343,40 @@ function DayPicks() {
       teamPicks.sort((a, b) => b.prob - a.prob);
 
       // Jugadores: consulta a todos los equipos con partido hoy.
-      const teamIdsInvolved = new Set();
+      const teamIdsInvolved = new Map(); // id -> código
       for (const g of pendingGames) {
-        if (map[g.homeCode]?.id) teamIdsInvolved.add(map[g.homeCode].id);
-        if (map[g.awayCode]?.id) teamIdsInvolved.add(map[g.awayCode].id);
+        if (map[g.homeCode]?.id) teamIdsInvolved.set(map[g.homeCode].id, g.homeCode);
+        if (map[g.awayCode]?.id) teamIdsInvolved.set(map[g.awayCode].id, g.awayCode);
       }
       const allPlayers = [];
       await Promise.all(
-        [...teamIdsInvolved].map(async (id) => {
+        [...teamIdsInvolved.entries()].map(async ([id, code]) => {
           const d = await fetch(`${BACKEND_URL}/api/nfl/team/${id}/skill-stats`).then((r) => r.json()).catch(() => ({ players: [] }));
-          allPlayers.push(...(d.players || []));
+          allPlayers.push(...(d.players || []).map((p) => ({ ...p, team: code })));
         })
       );
       const topByType = (type) => [...allPlayers].filter((p) => p.type === type).sort((a, b) => b.ydsPerGame - a.ydsPerGame).slice(0, 3);
       const topTD = [...allPlayers].sort((a, b) => b.tdProbability - a.tdProbability).slice(0, 3);
+      const topTeams = teamPicks.slice(0, 3);
+
+      // Guarda automáticamente equipo y TD para Precisión — las yardas
+      // de QB/RB/receptor se dejan fuera por ahora (son un número, no
+      // un sí/no, medir "acierto" ahí es más ambiguo).
+      if (topTeams.length > 0 || topTD.length > 0) {
+        const pickDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+        const nflPicks = [
+          ...topTeams.map((t) => ({ pick_date: pickDate, week: gamesData.week || null, pick_type: "team", player_id: null, player_name: t.team, team_code: t.teamCode, predicted_prob: t.prob })),
+          ...topTD.map((p) => ({ pick_date: pickDate, week: gamesData.week || null, pick_type: "td", player_id: p.id || null, player_name: p.name, team_code: p.team || "", predicted_prob: p.tdProbability })),
+        ];
+        fetch(`${BACKEND_URL}/api/nfl/picks/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ picks: nflPicks }),
+        }).catch(() => {});
+      }
 
       if (!cancelled) {
-        setPicks({ topTeams: teamPicks.slice(0, 3), topQB: topByType("passing"), topRB: topByType("rushing"), topWR: topByType("receiving"), topTD });
+        setPicks({ topTeams, topQB: topByType("passing"), topRB: topByType("rushing"), topWR: topByType("receiving"), topTD });
         setStatus("listo");
       }
     })().catch(() => { if (!cancelled) setStatus("error"); });
@@ -427,6 +445,14 @@ function GameDetail({ game, onBack }) {
       if (game.status === "Scheduled") {
         const r = await computeNflWinProb(map[game.homeCode], map[game.awayCode], weatherData);
         if (!cancelled) setResult(r);
+        if (r) {
+          const gameDate = new Date(game.date).toISOString().slice(0, 10);
+          fetch(`${BACKEND_URL}/api/nfl/predictions/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ game_date: gameDate, week: game.week || null, home_code: game.homeCode, away_code: game.awayCode, home_win_prob: r.prob }),
+          }).catch(() => {});
+        }
 
         const ou = computeNflOverUnder(map[game.homeCode], map[game.awayCode], weatherData);
         if (!cancelled) setOverUnder(ou);
@@ -662,6 +688,164 @@ function Standings() {
 }
 
 // ---- Precisión real de Over/Under ----
+// ---- Precisión real de probabilidad de ganar ----
+function WinProbAccuracy() {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    fetch(`${BACKEND_URL}/api/nfl/predictions/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/nfl/predictions/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  return (
+    <div className="rounded-xl border p-6 mb-4" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>Backtesting real — Probabilidad de ganar</div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>¿Qué tan certero es el modelo?</h2>
+
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar predicciones de semanas anteriores"}
+      </button>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && data && data.totalChecked === 0 && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          Todavía no hay predicciones comparadas contra resultados reales. La app guarda una predicción cada vez que entras al detalle de un partido pendiente — vuelve en unos días y presiona "Revisar predicciones de semanas anteriores".
+        </p>
+      )}
+
+      {status === "listo" && data && data.totalChecked > 0 && (
+        <>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{(data.accuracy * 100).toFixed(1)}%</div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Acertó al favorito</div>
+            </div>
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{data.brierScore.toFixed(3)}</div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Brier Score (0=perfecto, 0.25=azar)</div>
+            </div>
+          </div>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Basado en {data.totalChecked} predicciones reales comparadas</div>
+          <div className="space-y-1.5">
+            {data.recent.map((r, i) => {
+              const predictedFavorite = r.homeWinProb >= 0.5 ? r.home : r.away;
+              const correct = predictedFavorite === r.actualWinner;
+              return (
+                <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                  <span style={{ color: "#C9D6CD" }}>{r.date} · {r.away} @ {r.home}</span>
+                  <span style={{ color: "#8FA599" }}>Dio {(r.homeWinProb * 100).toFixed(0)}% a {r.home}</span>
+                  <span style={{ color: correct ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>{correct ? "✓ acertó" : "✗ falló"} (ganó {r.actualWinner})</span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- Precisión real de Picks del día (equipo + touchdown) ----
+function NflPicksAccuracy() {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    fetch(`${BACKEND_URL}/api/nfl/picks/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/nfl/picks/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  return (
+    <div className="rounded-xl border p-6 mb-4" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>Backtesting real — Picks del día</div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>¿Qué tan certeros son los Picks del día?</h2>
+
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar picks de días anteriores"}
+      </button>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && data && data.teams.total === 0 && data.td.total === 0 && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          Todavía no hay picks comparados contra resultados reales. La app guarda los picks del día automáticamente — vuelve en unos días y presiona "Revisar picks de días anteriores". Las yardas de QB/RB/receptor no se miden aquí todavía (son un número, no un sí/no).
+        </p>
+      )}
+
+      {status === "listo" && data && (data.teams.total > 0 || data.td.total > 0) && (
+        <>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                {data.teams.accuracy != null ? `${(data.teams.accuracy * 100).toFixed(1)}%` : "—"}
+              </div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Equipos ({data.teams.total})</div>
+            </div>
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                {data.td.accuracy != null ? `${(data.td.accuracy * 100).toFixed(1)}%` : "—"}
+              </div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Touchdown ({data.td.total})</div>
+            </div>
+          </div>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Últimos picks comparados</div>
+          <div className="space-y-1.5">
+            {data.recent.map((r, i) => (
+              <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                <span style={{ color: "#C9D6CD" }}>{r.date} · {r.name} <span style={{ color: "#8FA599" }}>({r.team})</span></span>
+                <span style={{ color: "#8FA599" }}>{r.type === "team" ? "Equipo" : "TD"} · {(r.prob * 100).toFixed(0)}%</span>
+                <span style={{ color: r.success ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>{r.success ? "✓ acertó" : "✗ falló"}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function OverUnderAccuracy() {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
@@ -825,7 +1009,11 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
         ) : view === "posiciones" ? (
           <Standings />
         ) : (
-          <OverUnderAccuracy />
+          <>
+            <WinProbAccuracy />
+            <NflPicksAccuracy />
+            <OverUnderAccuracy />
+          </>
         )}
 
         {!selectedGame && (
