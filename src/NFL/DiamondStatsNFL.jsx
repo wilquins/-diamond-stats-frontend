@@ -362,17 +362,22 @@ function DayPicks() {
       // Guarda automáticamente equipo y TD para Precisión — las yardas
       // de QB/RB/receptor se dejan fuera por ahora (son un número, no
       // un sí/no, medir "acierto" ahí es más ambiguo).
+      console.log(`[DIAGNÓSTICO NFL PICKS] topTeams.length=${topTeams.length} topTD.length=${topTD.length}`);
       if (topTeams.length > 0 || topTD.length > 0) {
         const pickDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
         const nflPicks = [
           ...topTeams.map((t) => ({ pick_date: pickDate, week: gamesData.week || null, pick_type: "team", player_id: null, player_name: t.team, team_code: t.teamCode, predicted_prob: t.prob })),
           ...topTD.map((p) => ({ pick_date: pickDate, week: gamesData.week || null, pick_type: "td", player_id: p.id || null, player_name: p.name, team_code: p.team || "", predicted_prob: p.tdProbability })),
         ];
+        console.log(`[DIAGNÓSTICO NFL PICKS] Enviando ${nflPicks.length} picks:`, JSON.stringify(nflPicks));
         fetch(`${BACKEND_URL}/api/nfl/picks/save`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ picks: nflPicks }),
-        }).catch(() => {});
+        })
+          .then((r) => r.json())
+          .then((data) => console.log("[DIAGNÓSTICO NFL PICKS] Respuesta del backend:", JSON.stringify(data)))
+          .catch((err) => console.log("[DIAGNÓSTICO NFL PICKS] Error de red real:", err.message));
       }
 
       if (!cancelled) {
