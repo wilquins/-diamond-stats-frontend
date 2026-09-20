@@ -393,11 +393,11 @@ function DayPicks() {
   if (!picks) return null;
 
   const sections = [
-    { label: "Mayor probabilidad de ganar hoy", items: picks.topTeams.map((t) => ({ name: `${t.team} vs ${t.opponent}`, stat: `${(t.prob * 100).toFixed(1)}%` })) },
-    { label: "Más yardas de pase hoy (QB)", items: picks.topQB.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
-    { label: "Más yardas de acarreo hoy (RB)", items: picks.topRB.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
-    { label: "Más yardas de recepción hoy", items: picks.topWR.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
-    { label: "Mayor probabilidad de touchdown hoy", items: picks.topTD.map((p) => ({ name: `${p.name} (${p.position})`, stat: `${(p.tdProbability * 100).toFixed(0)}%` })) },
+    { label: "Mayor probabilidad de ganar hoy", items: picks.topTeams.map((t) => ({ name: `${t.teamCode} le gana a ${t.opponent}`, stat: `${(t.prob * 100).toFixed(1)}%` })) },
+    { label: "Más yardas de pase hoy (QB)", items: picks.topQB.map((p) => ({ name: `${p.name} (${p.position} · ${p.team})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
+    { label: "Más yardas de acarreo hoy (RB)", items: picks.topRB.map((p) => ({ name: `${p.name} (${p.position} · ${p.team})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
+    { label: "Más yardas de recepción hoy", items: picks.topWR.map((p) => ({ name: `${p.name} (${p.position} · ${p.team})`, stat: `${p.ydsPerGame.toFixed(0)} yds/juego` })) },
+    { label: "Mayor probabilidad de touchdown hoy", items: picks.topTD.map((p) => ({ name: `${p.name} (${p.position} · ${p.team})`, stat: `${(p.tdProbability * 100).toFixed(0)}%` })) },
   ];
 
   return (
