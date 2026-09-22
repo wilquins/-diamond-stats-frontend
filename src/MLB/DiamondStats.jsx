@@ -329,6 +329,24 @@ async function computeFullHomeWinProb(game) {
 
   const clamped = Math.min(0.92, Math.max(0.08, baseHomeWinProb + situationalAdj + homeRoadAdj + bullpenAdj + closerFatigueAdj + h2hAdj + pitcherHistoryAdj + fatigueAdj + weatherAdj + lineupStrengthAdj));
 
+  // ---- Predictor real de ESPN, como referencia externa independiente ----
+  // Su propio modelo (abridor + bateo + factor de parque) se promedia con
+  // el nuestro — dos modelos construidos por separado, cuando se
+  // combinan, reducen el error que cualquiera de los dos tiene solo
+  // ("ensembling", principio estadístico real). Peso moderado (25%)
+  // porque el nuestro ya es más detallado (bullpen, fatiga de cerrador,
+  // alineación confirmada, clima, etc.) — el de ESPN es un chequeo de
+  // sanidad, no un reemplazo. Si no se encuentra el partido en ESPN (o
+  // falla la consulta), se usa el nuestro sin modificar.
+  let espnPredictorHomeProb = null;
+  try {
+    const espnPredictor = await fetch(`${BACKEND_URL}/api/mlb-predictor/${game.homeCode}/${game.awayCode}?date=${gameDate}`).then((r) => r.json());
+    espnPredictorHomeProb = espnPredictor?.homeWinProb ?? null;
+  } catch { /* sin referencia externa disponible, seguimos solo con lo nuestro */ }
+  const clampedWithEnsemble = espnPredictorHomeProb != null
+    ? clamped * 0.75 + espnPredictorHomeProb * 0.25
+    : clamped;
+
   // ---- Corrección de calibración real ----
   // Con predicciones reales acumuladas se encontró sobreconfianza real
   // en partidos con mucha ventaja para un lado — se corrige comprimiendo
@@ -341,8 +359,8 @@ async function computeFullHomeWinProb(game) {
   // favorito, dejando sin corregir los casos donde el VISITANTE era muy
   // favorito (clamped bajo, como 0.16) — encontrado real con MIL @ CIN,
   // donde Milwaukee (visitante) mostraba 83.9% crudo sin corregir.
-  const correctedProb = 0.5 + (clamped - 0.5) * 0.5;
-  return { prob: correctedProb, rawProb: clamped };
+  const correctedProb = 0.5 + (clampedWithEnsemble - 0.5) * 0.5;
+  return { prob: correctedProb, rawProb: clampedWithEnsemble, espnPredictorHomeProb };
 }
 
 // Calcula los picks reales del día — 3 bateadores y 3 equipos — con la
@@ -1099,6 +1117,7 @@ function TodayGamesHeader() {
   const [headToHeadStatus, setHeadToHeadStatus] = useState("idle");
   const [computedWinProb, setComputedWinProb] = useState(null); // probabilidad real, calculada con la MISMA función que usa el guardado — para que la pantalla y lo guardado nunca se desincronicen
   const [winProbStatus, setWinProbStatus] = useState("idle");
+  const [espnPredictorHomeProb, setEspnPredictorHomeProb] = useState(null); // predictor real de ESPN, mostrado por transparencia — de dónde sale el 25% mezclado
   const [computedOverUnder, setComputedOverUnder] = useState(null); // { line, overProb, underProb, expectedRuns } — misma idea, para Over/Under
   const [overUnderStatus, setOverUnderStatus] = useState("idle");
   const [gameRest, setGameRest] = useState({}); // { [code]: { daysRested, lastGameDayNight, ... } }
@@ -1160,10 +1179,12 @@ function TodayGamesHeader() {
     // guardado automático — así lo que ves en pantalla es exactamente lo
     // mismo que se guarda para Precisión, sin que puedan desincronizarse.
     setComputedWinProb(null);
+    setEspnPredictorHomeProb(null);
     setWinProbStatus("cargando");
     computeFullHomeWinProb(game).then((result) => {
       const prob = result?.prob ?? null;
       setComputedWinProb(prob);
+      setEspnPredictorHomeProb(result?.espnPredictorHomeProb ?? null);
       setWinProbStatus(prob != null ? "listo" : "error");
     });
 
@@ -1451,7 +1472,12 @@ function TodayGamesHeader() {
 
             return (
               <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 (con Expectativa Pitagórica) + localía + parque + platoon real de equipo + fuerza real de alineación confirmada + ERA (FIP/ERA) + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso)</div>
+                <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Probabilidad de ganar (Log5 (con Expectativa Pitagórica) + localía + parque + platoon real de equipo + fuerza real de alineación confirmada + ERA (FIP/ERA) + bullpen + fatiga del cerrador + récord casa/ruta + forma reciente + cara a cara + historial del abridor + descanso + clima adverso{espnPredictorHomeProb != null ? " + predictor real de ESPN" : ""})</div>
+                {espnPredictorHomeProb != null && (
+                  <p className="text-[10px] mb-2" style={{ color: "#5A7368" }}>
+                    Predictor real de ESPN para {selectedGame.home}: {(espnPredictorHomeProb * 100).toFixed(1)}% — se mezcla con peso moderado (25%) como referencia externa independiente.
+                  </p>
+                )}
                 <div className="space-y-2.5 mb-3">
                   <div>
                     <div className="flex items-center justify-between text-xs mb-1">
