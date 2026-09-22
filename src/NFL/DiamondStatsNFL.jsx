@@ -23,7 +23,7 @@ const NFL_HOME_ADVANTAGE = 0.032;
 // equipo, y clima real cuando es adverso (viento fuerte, lluvia
 // probable, o frío extremo) — el local, ya acostumbrado a sus propias
 // condiciones, tiene una ventaja leve real en esos casos.
-async function computeNflWinProb(home, away, weather) {
+async function computeNflWinProb(home, away, weather, eventId) {
   if (!home || !away) return null;
 
   const gamesHome = home.wins + home.losses + home.ties;
@@ -123,8 +123,28 @@ async function computeNflWinProb(home, away, weather) {
     if (adverse) weatherAdj = 0.02;
   }
 
-  const prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj + homeRoadAdj + weatherAdj;
-  return { prob: Math.min(0.92, Math.max(0.08, prob)), diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h, homeHA, awayHA };
+  let prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj + homeRoadAdj + weatherAdj;
+
+  // FPI real de ESPN (su propio modelo, calibrado con años de fuerza de
+  // roster) — se usa como referencia externa, con más peso cuanto menos
+  // muestra propia de esta temporada tengamos. Con 0 partidos jugados,
+  // el FPI pesa hasta 60%; con 6+ partidos reales, ya no se usa nada —
+  // se confía 100% en nuestro propio modelo detallado (que ve cosas que
+  // el FPI no ve: cara a cara específico, clima real de hoy, récord
+  // casa/ruta específico de cada equipo).
+  let fpi = null;
+  if (eventId && home.id && away.id) {
+    fpi = await fetch(`${BACKEND_URL}/api/nfl/game/${eventId}/fpi?homeTeamId=${home.id}&awayTeamId=${away.id}`)
+      .then((r) => r.json()).catch(() => null);
+  }
+  const fpiHomeProb = fpi?.home?.winProb ?? null;
+  if (fpiHomeProb != null) {
+    const avgShrink = (shrinkWeight(gamesHome) + shrinkWeight(gamesAway)) / 2;
+    const ownWeight = 0.4 + 0.6 * avgShrink; // 40% (0 partidos) a 100% (6+ partidos)
+    prob = prob * ownWeight + fpiHomeProb * (1 - ownWeight);
+  }
+
+  return { prob: Math.min(0.92, Math.max(0.08, prob)), diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h, homeHA, awayHA, fpiHomeProb };
 }
 
 // ---- Aproximación de la CDF normal estándar (Abramowitz y Stegun) ----
@@ -354,7 +374,7 @@ function DayPicks() {
       // tocar cada partido específico.
       const teamPicks = [];
       for (const g of pendingGames) {
-        const r = await computeNflWinProb(map[g.homeCode], map[g.awayCode], null);
+        const r = await computeNflWinProb(map[g.homeCode], map[g.awayCode], null, g.id);
         if (r) {
           const homeWins = r.prob >= 0.5;
           teamPicks.push({
@@ -473,7 +493,7 @@ function GameDetail({ game, onBack }) {
       setStandingsMap(map);
       setWeather(weatherData);
       if (game.status === "Scheduled") {
-        const r = await computeNflWinProb(map[game.homeCode], map[game.awayCode], weatherData);
+        const r = await computeNflWinProb(map[game.homeCode], map[game.awayCode], weatherData, game.id);
         if (!cancelled) setResult(r);
         if (r) {
           const gameDate = new Date(game.date).toISOString().slice(0, 10);
@@ -540,8 +560,13 @@ function GameDetail({ game, onBack }) {
         <>
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-              Probabilidad de ganar (Log5 con Expectativa Pitagórica + localía + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima)
+              Probabilidad de ganar (Log5 con Expectativa Pitagórica + localía + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima{result.fpiHomeProb != null ? " + FPI real de ESPN" : ""})
             </div>
+            {result.fpiHomeProb != null && (
+              <p className="text-[10px] mb-2" style={{ color: "#5A7368" }}>
+                FPI real de ESPN para {game.homeName}: {(result.fpiHomeProb * 100).toFixed(1)}% — se mezcla con más peso cuanta menos muestra propia de esta temporada haya.
+              </p>
+            )}
             <div className="space-y-2.5">
               <div>
                 <div className="flex items-center justify-between text-xs mb-1">
