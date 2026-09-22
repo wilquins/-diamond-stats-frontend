@@ -26,28 +26,48 @@ const NFL_HOME_ADVANTAGE = 0.032;
 async function computeNflWinProb(home, away, weather) {
   if (!home || !away) return null;
 
+  const gamesHome = home.wins + home.losses + home.ties;
+  const gamesAway = away.wins + away.losses + away.ties;
+
+  // Con pocos partidos jugados (normal en las primeras 3-5 semanas de
+  // temporada), un solo partido con marcador exagerado (una paliza de
+  // 35-3, por ejemplo) dispara la Expectativa Pitagórica y el
+  // diferencial de puntos a valores extremos que NO representan la
+  // fuerza real del equipo — con el exponente 2.37, esa distorsión se
+  // amplifica todavía más. Mismo principio real que ya aplicamos en
+  // MLB al regresionar el BABIP de un bateador hacia su propio promedio
+  // de carrera cuando tiene pocos batazos en juego: con poca muestra,
+  // el número se jala hacia un punto neutral (50% / 0 de diferencial)
+  // proporcional a cuántos partidos reales lo respaldan. Con 6+
+  // partidos jugados ya se confía 100% en el dato real de la temporada.
+  const SHRINK_GAMES = 6;
+  const shrinkWeight = (games) => Math.min(1, games / SHRINK_GAMES);
+
   // Expectativa Pitagórica real de NFL (exponente ~2.37, distinto al de
   // MLB ~1.83, pero mismo principio real de Bill James): mide la fuerza
   // real de un equipo por sus puntos anotados y permitidos, no por su
   // récord de victorias, que puede tener suerte real mezclada en juegos
   // cerrados. Mezclado 70% Pitagórico + 30% récord real — mismo
-  // principio que ya usamos en MLB hoy.
-  const pythWinPct = (team) => {
+  // principio que ya usamos en MLB hoy — y luego regresionado según
+  // cuántos partidos reales de esta temporada lo respaldan.
+  const pythWinPct = (team, games) => {
     if (!team.pointsFor || !team.pointsAgainst || team.pointsFor <= 0 || team.pointsAgainst <= 0) return team.winPercent ?? 0.5;
     const exp = 2.37;
     const pyth = Math.pow(team.pointsFor, exp) / (Math.pow(team.pointsFor, exp) + Math.pow(team.pointsAgainst, exp));
-    return pyth * 0.7 + (team.winPercent ?? 0.5) * 0.3;
+    const blended = pyth * 0.7 + (team.winPercent ?? 0.5) * 0.3;
+    const w = shrinkWeight(games);
+    return 0.5 + (blended - 0.5) * w;
   };
-  const baseProb = log5(pythWinPct(home), pythWinPct(away));
+  const baseProb = log5(pythWinPct(home, gamesHome), pythWinPct(away, gamesAway));
 
-  const gamesHome = home.wins + home.losses + home.ties;
-  const gamesAway = away.wins + away.losses + away.ties;
   const homeDiffPerGame = gamesHome > 0 ? (home.pointsFor - home.pointsAgainst) / gamesHome : 0;
   const awayDiffPerGame = gamesAway > 0 ? (away.pointsFor - away.pointsAgainst) / gamesAway : 0;
   // Cada punto de diferencial promedio de más vale ~2% de probabilidad,
   // con un tope para que un solo partido con marcador exagerado no
-  // distorsione todo el cálculo.
-  const diffAdj = Math.max(-0.15, Math.min(0.15, (homeDiffPerGame - awayDiffPerGame) * 0.02));
+  // distorsione todo el cálculo — y regresionado igual que la
+  // Pitagórica cuando hay pocos partidos jugados de por medio.
+  const diffAdjRaw = Math.max(-0.15, Math.min(0.15, (homeDiffPerGame - awayDiffPerGame) * 0.02));
+  const diffAdj = diffAdjRaw * Math.min(shrinkWeight(gamesHome), shrinkWeight(gamesAway));
 
   // Diferencial de balón real, normalizado por juego — un equipo que
   // roba más balones de los que pierde genuinamente gana más de lo que
@@ -60,7 +80,8 @@ async function computeNflWinProb(home, away, weather) {
   if (homeStats?.turnoverDifferential != null && awayStats?.turnoverDifferential != null && gamesHome > 0 && gamesAway > 0) {
     const homeTOPerGame = homeStats.turnoverDifferential / gamesHome;
     const awayTOPerGame = awayStats.turnoverDifferential / gamesAway;
-    turnoverAdj = Math.max(-0.1, Math.min(0.1, (homeTOPerGame - awayTOPerGame) * 0.05));
+    const turnoverAdjRaw = Math.max(-0.1, Math.min(0.1, (homeTOPerGame - awayTOPerGame) * 0.05));
+    turnoverAdj = turnoverAdjRaw * Math.min(shrinkWeight(gamesHome), shrinkWeight(gamesAway));
   }
 
   // Cara a cara real esta temporada — solo se activa si ya se
@@ -86,7 +107,11 @@ async function computeNflWinProb(home, away, weather) {
   if (homeAtHomePct != null && awayOnRoadPct != null) {
     const homeAtHomeDelta = homeAtHomePct - (home.winPercent ?? 0.5);
     const awayOnRoadDelta = awayOnRoadPct - (away.winPercent ?? 0.5);
-    homeRoadAdj = (homeAtHomeDelta - awayOnRoadDelta) * 0.3;
+    const homeRoadAdjRaw = (homeAtHomeDelta - awayOnRoadDelta) * 0.3;
+    // El récord de casa/ruta se parte a la mitad de los partidos de la
+    // temporada (2-3 en casa, 2-3 en ruta a estas alturas) — todavía
+    // más chico que la muestra general, así que se regresiona igual.
+    homeRoadAdj = homeRoadAdjRaw * Math.min(shrinkWeight(gamesHome), shrinkWeight(gamesAway));
   }
 
   // Clima real adverso: viento fuerte (15+ mph), alta probabilidad de
