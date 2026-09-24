@@ -236,11 +236,31 @@ function GameDetail({ game, onBack }) {
       const r = await computeNhlWinProb(home, away, g);
       if (cancelled) return;
       setResult(r);
-      setOverUnder(computeNhlOverUnder(home, away, g));
+      const ou = computeNhlOverUnder(home, away, g);
+      setOverUnder(ou);
       setStatus("listo");
+
+      // Guarda la predicción real ANTES de saberse el resultado — mismo
+      // principio de backtesting honesto que ya usamos en MLB/NFL. Los
+      // juegos de pretemporada NO se guardan: no miden nada real sobre la
+      // fuerza real del equipo titular, y contaminarían la precisión.
+      if (!game.isPreseason && r) {
+        fetch(`${BACKEND_URL}/api/nhl/predictions/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ game_date: gameDateET, home_code: game.homeCode, away_code: game.awayCode, home_win_prob: r.prob }),
+        }).catch(() => {});
+      }
+      if (!game.isPreseason && ou) {
+        fetch(`${BACKEND_URL}/api/nhl/overunder/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ game_date: gameDateET, home_code: game.homeCode, away_code: game.awayCode, line: ou.line, over_prob: ou.overProb, expected_total: ou.expectedTotal }),
+        }).catch(() => {});
+      }
     })();
     return () => { cancelled = true; };
-  }, [game.homeCode, game.awayCode, game.startTimeUTC]);
+  }, [game.homeCode, game.awayCode, game.startTimeUTC, game.isPreseason]);
 
   return (
     <div className="mb-6">
@@ -454,8 +474,164 @@ function Standings() {
   );
 }
 
+// ---- Precisión real de probabilidad de ganar ----
+function WinProbAccuracy() {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    fetch(`${BACKEND_URL}/api/nhl/predictions/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/nhl/predictions/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  return (
+    <div className="rounded-xl border p-6 mb-4" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>Backtesting real — Probabilidad de ganar</div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>¿Qué tan certero es el modelo?</h2>
+
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar predicciones de días anteriores"}
+      </button>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && data && data.totalChecked === 0 && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          Todavía no hay predicciones comparadas contra resultados reales. La app guarda una predicción cada vez que entras al detalle de un partido de temporada regular pendiente (los de pretemporada no cuentan) — vuelve cuando haya juegos reales terminados y presiona "Revisar predicciones de días anteriores".
+        </p>
+      )}
+
+      {status === "listo" && data && data.totalChecked > 0 && (
+        <>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{(data.accuracy * 100).toFixed(1)}%</div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Acertó al favorito</div>
+            </div>
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{data.brierScore.toFixed(3)}</div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Brier Score (0=perfecto, 0.25=azar)</div>
+            </div>
+          </div>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Basado en {data.totalChecked} predicciones reales comparadas</div>
+          <div className="space-y-1.5">
+            {data.recent.map((r, i) => {
+              const predictedFavorite = r.homeWinProb >= 0.5 ? r.home : r.away;
+              const correct = predictedFavorite === r.actualWinner;
+              return (
+                <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                  <span style={{ color: "#C9D6CD" }}>{r.date} · {r.away} @ {r.home}</span>
+                  <span style={{ color: "#8FA599" }}>Dio {(r.homeWinProb * 100).toFixed(0)}% a {r.home}</span>
+                  <span style={{ color: correct ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>{correct ? "✓ acertó" : "✗ falló"} (ganó {r.actualWinner})</span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---- Precisión real de Over/Under ----
+function OverUnderAccuracy() {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    fetch(`${BACKEND_URL}/api/nhl/overunder/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/nhl/overunder/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  return (
+    <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>Backtesting real — Over/Under</div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>¿Qué tan certero es el Over/Under?</h2>
+
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar Over/Under de días anteriores"}
+      </button>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && data && data.totalChecked === 0 && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          Todavía no hay Over/Under comparados contra resultados reales. La app guarda una predicción cada vez que entras al detalle de un partido de temporada regular — vuelve cuando haya juegos reales terminados y presiona "Revisar Over/Under de días anteriores".
+        </p>
+      )}
+
+      {status === "listo" && data && data.totalChecked > 0 && (
+        <>
+          <div className="p-3.5 rounded-lg border text-center mb-4" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{(data.accuracy * 100).toFixed(1)}%</div>
+            <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Acertó Over/Under ({data.totalChecked} decisivos)</div>
+          </div>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Últimas comparaciones</div>
+          <div className="space-y-1.5">
+            {data.recent.map((r, i) => {
+              const predictedSide = r.overProb >= 0.5 ? "Over" : "Under";
+              const isPush = r.actualResult === "push";
+              const correct = !isPush && r.actualResult === predictedSide.toLowerCase();
+              return (
+                <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                  <span style={{ color: "#C9D6CD" }}>{r.date} · {r.away} @ {r.home}</span>
+                  <span style={{ color: "#8FA599" }}>Línea {r.line} · Dio {predictedSide}</span>
+                  <span style={{ color: "#C9D6CD" }}>{r.actualTotalGoals} goles reales</span>
+                  <span style={{ color: isPush ? "#8FA599" : correct ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>
+                    {isPush ? "Push" : correct ? "✓ acertó" : "✗ falló"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function DiamondStatsNHL({ onBackToMenu }) {
-  const [view, setView] = useState("juegos"); // "juegos" | "posiciones"
+  const [view, setView] = useState("juegos"); // "juegos" | "posiciones" | "precision"
   const [selectedGame, setSelectedGame] = useState(null);
 
   return (
@@ -507,6 +683,17 @@ export default function DiamondStatsNHL({ onBackToMenu }) {
             >
               Tabla de posiciones
             </button>
+            <button
+              onClick={() => setView("precision")}
+              className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+              style={{
+                background: view === "precision" ? "#FFB627" : "#12281E",
+                color: view === "precision" ? "#0B1F17" : "#8FA599",
+                border: "1px solid " + (view === "precision" ? "#FFB627" : "#1F3D30"),
+              }}
+            >
+              Precisión
+            </button>
           </div>
         )}
 
@@ -514,13 +701,18 @@ export default function DiamondStatsNHL({ onBackToMenu }) {
           <GameDetail game={selectedGame} onBack={() => setSelectedGame(null)} />
         ) : view === "juegos" ? (
           <GamesList onSelect={setSelectedGame} />
-        ) : (
+        ) : view === "posiciones" ? (
           <Standings />
+        ) : (
+          <>
+            <WinProbAccuracy />
+            <OverUnderAccuracy />
+          </>
         )}
 
         {!selectedGame && (
           <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
-            Fase 2: probabilidad real con Log5 sobre % de puntos real + ventaja de casa (dato real citado) + forma reciente + récord casa/ruta + fuerza real de calendario + récord real por división/conferencia del rival + portero titular real (confirmado por ESPN, cruzado con sus stats oficiales de NHL), más Over/Under con Poisson. Pendiente: backtesting real guardado, igual que ya existe en MLB y NFL. La temporada regular 2026-27 recién empieza (hoy solo hay pretemporada), así que el récord real usado por ahora es el de la última temporada regular completa.
+            Fase 2: probabilidad real con Log5 sobre % de puntos real + ventaja de casa (dato real citado) + forma reciente + récord casa/ruta + fuerza real de calendario + récord real por división/conferencia del rival + portero titular real (confirmado por ESPN, cruzado con sus stats oficiales de NHL), más Over/Under con Poisson y backtesting real guardado — igual que ya existe en MLB y NFL. La temporada regular 2026-27 recién empieza (hoy solo hay pretemporada, que no se guarda para precisión), así que el récord real usado por ahora es el de la última temporada regular completa.
           </p>
         )}
       </div>
