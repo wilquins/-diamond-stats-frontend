@@ -28,17 +28,33 @@ function pointsPct(w, l, otl) {
   return ((w ?? 0) + (otl ?? 0) * 0.5) / played;
 }
 
+// Save % promedio real de la liga en 2023-24 (.903) — fuente: StatMuse,
+// sobre 79,025 tiros reales de toda la NHL
+// (https://www.statmuse.com/nhl/ask/nhl-league-average-goalie-save-percentage-in-2024).
+// Mismo principio que el ERA promedio de liga en MLB: mide qué tan
+// bueno/malo es el portero titular de HOY frente al promedio real.
+const NHL_LEAGUE_AVG_SAVE_PCT = 0.903;
+
+// Cuánta ventaja aporta un portero según qué tan por arriba/abajo del
+// save% promedio de liga está su temporada real — mismo principio que
+// pitcherEdge() en MLB con el ERA. Escala moderada: un portero de élite
+// (.925) vale ~+5.5%, uno flojo (.880) vale ~-5.75%.
+function goalieEdge(savePct) {
+  if (savePct == null) return 0;
+  return Math.max(-0.08, Math.min(0.08, (savePct - NHL_LEAGUE_AVG_SAVE_PCT) * 2.5));
+}
+
 // Calcula la probabilidad real de ganar de un partido de NHL: récord real
 // (Log5 sobre % de puntos) + ventaja de casa + forma reciente real
 // (últimos 10) + récord real de casa del local vs. ruta del visitante +
-// fuerza real de calendario (de qué tan duros han sido los rivales que ya
-// enfrentó cada equipo esta temporada de referencia).
+// fuerza real de calendario + portero titular real confirmado por ESPN,
+// cruzado con sus estadísticas reales y oficiales de la NHL (save%, GAA).
 //
-// Lo que falta todavía (fase 2, pendiente): portero titular real — en
-// hockey es probablemente el factor individual más grande, igual que el
-// abridor en MLB — y Over/Under. No se adivina ninguno de los dos: se
-// omiten por ahora en vez de rellenarlos con un número inventado.
-async function computeNhlWinProb(home, away) {
+// Si el portero titular todavía no está confirmado/proyectado (normal
+// varias horas antes del juego) o no se pudo cruzar con sus stats reales,
+// ese factor simplemente no se aplica — nunca se rellena con un número
+// inventado.
+async function computeNhlWinProb(home, away, goalies) {
   if (!home || !away) return null;
 
   const homeStrength = home.pointPctg ?? 0.5;
@@ -65,8 +81,58 @@ async function computeNhlWinProb(home, away) {
     sosAdj = (homeSchedule.avgOpponentWinPct - awaySchedule.avgOpponentWinPct) * 0.3;
   }
 
-  const prob = Math.min(0.92, Math.max(0.08, baseProb + NHL_HOME_ADVANTAGE + formAdj + homeRoadAdj + sosAdj));
-  return { prob, formAdj, homeRoadAdj, sosAdj, homeSchedule, awaySchedule };
+  // El portero del LOCAL detiene tiros del ataque visitante y viceversa —
+  // por eso la resta va cruzada: la ventaja neta es el portero de casa
+  // MENOS el portero visitante, ambos frente al mismo promedio de liga.
+  const goalieAdj = goalieEdge(goalies?.home?.stats?.savePercentage) - goalieEdge(goalies?.away?.stats?.savePercentage);
+
+  const prob = Math.min(0.92, Math.max(0.08, baseProb + NHL_HOME_ADVANTAGE + formAdj + homeRoadAdj + sosAdj + goalieAdj));
+  return { prob, formAdj, homeRoadAdj, sosAdj, goalieAdj, homeSchedule, awaySchedule };
+}
+
+// ---- Distribución de Poisson — mismo modelo que ya usamos en MLB para
+// datos de "conteo" como goles/carreras en un juego. ----
+function factorial(n) {
+  let r = 1;
+  for (let i = 2; i <= n; i++) r *= i;
+  return r;
+}
+function poissonCDF(k, lambda) {
+  let sum = 0;
+  for (let i = 0; i <= k; i++) sum += (Math.exp(-lambda) * Math.pow(lambda, i)) / factorial(i);
+  return sum;
+}
+
+// Over/Under real de NHL: goles esperados del local (promedio entre su
+// ataque real y la defensa real del rival) + goles esperados del
+// visitante (mismo principio al revés), pasado por Poisson — la suma de
+// dos variables Poisson independientes es también Poisson (con lambda =
+// suma de ambas), así que no hace falta nada más elaborado. Si hay
+// portero titular real confirmado, su save% real ajusta un poco el total
+// esperado hacia abajo (portero de élite) o arriba (portero flojo).
+function computeNhlOverUnder(home, away, goalies) {
+  if (!home?.gamesPlayed || !away?.gamesPlayed) return null;
+  const homeGFAvg = home.goalFor / home.gamesPlayed;
+  const homeGAAvg = home.goalAgainst / home.gamesPlayed;
+  const awayGFAvg = away.goalFor / away.gamesPlayed;
+  const awayGAAvg = away.goalAgainst / away.gamesPlayed;
+
+  let expectedHomeGoals = (homeGFAvg + awayGAAvg) / 2;
+  let expectedAwayGoals = (awayGFAvg + homeGAAvg) / 2;
+
+  const homeGoalieAdj = goalieEdge(goalies?.home?.stats?.savePercentage);
+  const awayGoalieAdj = goalieEdge(goalies?.away?.stats?.savePercentage);
+  // Un portero de élite reduce los goles reales que le meten (no los que
+  // anota su propio equipo) — por eso el ajuste del portero LOCAL golpea
+  // los goles esperados del VISITANTE, y viceversa.
+  expectedAwayGoals *= 1 - homeGoalieAdj;
+  expectedHomeGoals *= 1 - awayGoalieAdj;
+
+  const expectedTotal = Math.max(1, expectedHomeGoals + expectedAwayGoals);
+  const line = Math.round(expectedTotal - 0.5) + 0.5;
+  const underProb = poissonCDF(Math.floor(line), expectedTotal);
+  const overProb = 1 - underProb;
+  return { line, overProb, underProb, expectedTotal };
 }
 
 // ---- Lista de juegos de hoy ----
@@ -139,6 +205,8 @@ function GamesList({ onSelect }) {
 function GameDetail({ game, onBack }) {
   const [teams, setTeams] = useState(null);
   const [result, setResult] = useState(null);
+  const [goalies, setGoalies] = useState(null);
+  const [overUnder, setOverUnder] = useState(null);
   const [status, setStatus] = useState("cargando");
 
   useEffect(() => {
@@ -151,15 +219,28 @@ function GameDetail({ game, onBack }) {
       const home = map[game.homeCode];
       const away = map[game.awayCode];
       setTeams({ home, away });
-      if (home && away) {
-        const r = await computeNhlWinProb(home, away);
-        if (!cancelled) { setResult(r); setStatus("listo"); }
-      } else if (!cancelled) {
-        setStatus("listo");
-      }
+      if (!home || !away) { if (!cancelled) setStatus("listo"); return; }
+
+      // Portero titular real de hoy — se necesita el nombre COMPLETO real
+      // de cada equipo (no el abreviado) para emparejar con el evento de
+      // ESPN, que es la única fuente real que confirma el titular antes
+      // del juego.
+      const gameDateET = new Date(game.startTimeUTC).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+      const g = home.fullName && away.fullName
+        ? await fetch(`${BACKEND_URL}/api/nhl/goalies/${game.homeCode}/${game.awayCode}?date=${gameDateET}&homeName=${encodeURIComponent(home.fullName)}&awayName=${encodeURIComponent(away.fullName)}`)
+            .then((r) => r.json()).catch(() => null)
+        : null;
+      if (cancelled) return;
+      setGoalies(g);
+
+      const r = await computeNhlWinProb(home, away, g);
+      if (cancelled) return;
+      setResult(r);
+      setOverUnder(computeNhlOverUnder(home, away, g));
+      setStatus("listo");
     })();
     return () => { cancelled = true; };
-  }, [game.homeCode, game.awayCode]);
+  }, [game.homeCode, game.awayCode, game.startTimeUTC]);
 
   return (
     <div className="mb-6">
@@ -203,7 +284,7 @@ function GameDetail({ game, onBack }) {
           return (
             <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
               <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-                Probabilidad de ganar (Log5 sobre % de puntos real + ventaja de casa + forma reciente + récord casa/ruta + fuerza real de calendario)
+                Probabilidad de ganar (Log5 sobre % de puntos real + ventaja de casa + forma reciente + récord casa/ruta + fuerza real de calendario{(goalies?.home?.stats || goalies?.away?.stats) ? " + portero titular real" : ""})
               </div>
               {(result.homeSchedule?.avgOpponentWinPct != null || result.awaySchedule?.avgOpponentWinPct != null) && (
                 <p className="text-[10px] mb-2" style={{ color: "#5A7368" }}>
@@ -259,8 +340,63 @@ function GameDetail({ game, onBack }) {
           </div>
         )}
 
+        {(goalies?.home || goalies?.away) && (
+          <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Portero titular real (confirmado por ESPN)</div>
+            <div className="grid grid-cols-2 gap-3 text-[11px]" style={{ color: "#8FA599" }}>
+              {[{ label: game.awayName, g: goalies?.away }, { label: game.homeName, g: goalies?.home }].map(({ label, g }, i) => (
+                <div key={i}>
+                  <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{label}</div>
+                  {g ? (
+                    <>
+                      <div style={{ color: "#FFB627" }}>{g.name} <span style={{ color: g.status === "Confirmed" ? "#3FC97A" : "#8FA599", fontSize: "9px" }}>({g.status === "Confirmed" ? "confirmado" : "proyectado"})</span></div>
+                      {g.stats ? (
+                        <>
+                          <div>Save%: <b style={{ color: "#C9D6CD" }}>{(g.stats.savePercentage * 100).toFixed(1)}%</b> · GAA: <b style={{ color: "#C9D6CD" }}>{g.stats.goalsAgainstAverage?.toFixed(2)}</b></div>
+                          <div>{g.stats.wins}-{g.stats.losses} en {g.stats.gamesPlayed} juegos reales esta temporada</div>
+                        </>
+                      ) : (
+                        <div style={{ color: "#5A7368" }}>Sin stats reales cruzadas todavía.</div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ color: "#5A7368" }}>Sin confirmar todavía.</div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+            Over/Under estimado{overUnder ? ` · línea ${overUnder.line} goles` : ""}
+          </div>
+          {overUnder ? (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.overProb >= overUnder.underProb ? "#1A362A" : "#0F251C" }}>
+                  <span style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD" }}>Over {overUnder.line}</span>
+                  <span className="font-bold tabular-nums" style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.overProb * 100).toFixed(1)}%</span>
+                </div>
+                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.underProb > overUnder.overProb ? "#1A362A" : "#0F251C" }}>
+                  <span style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD" }}>Under {overUnder.line}</span>
+                  <span className="font-bold tabular-nums" style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.underProb * 100).toFixed(1)}%</span>
+                </div>
+              </div>
+              <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
+                Goles totales esperados: {overUnder.expectedTotal.toFixed(2)} — combina el ataque y la defensa reales de ambos equipos esta temporada de referencia{(goalies?.home?.stats || goalies?.away?.stats) ? ", ajustado por el save% real del portero titular confirmado" : ""}, pasado por una distribución de Poisson (mismo modelo que ya usamos en MLB).
+              </p>
+            </>
+          ) : (
+            <p className="text-[11px]" style={{ color: "#5A7368" }}>
+              Sin datos suficientes todavía — uno de los dos equipos no tiene juegos reales jugados en la temporada de referencia.
+            </p>
+          )}
+        </div>
+
         <p className="text-[10px] leading-relaxed" style={{ color: "#5A7368" }}>
-          Todavía no incluye portero titular real (probablemente el factor más grande en hockey) ni Over/Under — llegan en la siguiente fase, con los mismos datos reales de la API oficial de NHL.
+          Fase 2: portero titular real (confirmado por ESPN, cruzado con sus stats oficiales de NHL) + Over/Under con Poisson. Pendiente: backtesting real guardado en Supabase, para medir qué tan certero es el modelo — igual que ya existe en MLB y NFL.
         </p>
       </div>
     </div>
@@ -329,7 +465,7 @@ export default function DiamondStatsNHL({ onBackToMenu }) {
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full" style={{ background: "#C8393E" }} />
             <span className="text-[11px] tracking-[0.25em] uppercase" style={{ color: "#8FA599", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
-              NHL Analytics — Fase 1
+              NHL Analytics — Fase 2
             </span>
             {onBackToMenu && (
               <button
@@ -384,7 +520,7 @@ export default function DiamondStatsNHL({ onBackToMenu }) {
 
         {!selectedGame && (
           <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
-            Fase 1: probabilidad real con Log5 sobre % de puntos real + ventaja de casa (dato real citado) + forma reciente + récord casa/ruta + fuerza real de calendario + récord real por división/conferencia del rival. Pendiente: portero titular real, Over/Under, y backtesting guardado — llegan en la siguiente fase. La temporada regular 2026-27 recién empieza (hoy solo hay pretemporada), así que el récord real usado por ahora es el de la última temporada regular completa.
+            Fase 2: probabilidad real con Log5 sobre % de puntos real + ventaja de casa (dato real citado) + forma reciente + récord casa/ruta + fuerza real de calendario + récord real por división/conferencia del rival + portero titular real (confirmado por ESPN, cruzado con sus stats oficiales de NHL), más Over/Under con Poisson. Pendiente: backtesting real guardado, igual que ya existe en MLB y NFL. La temporada regular 2026-27 recién empieza (hoy solo hay pretemporada), así que el récord real usado por ahora es el de la última temporada regular completa.
           </p>
         )}
       </div>
