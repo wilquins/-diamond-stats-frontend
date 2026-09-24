@@ -650,10 +650,26 @@ function GameDetail({ game, onBack }) {
               <div>
                 <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{game.awayName} · Visitante</div>
                 <div>En ruta: <b style={{ color: "#FFB627" }}>{result.awayHA?.awayRecord ? `${result.awayHA.awayRecord.w}-${result.awayHA.awayRecord.l}` : "—"}</b></div>
+                {(() => {
+                  const oppDivId = result.homeHA?.ownDivisionId;
+                  const vsDiv = oppDivId != null ? result.awayHA?.recordByDivision?.[oppDivId] : null;
+                  const isInter = result.awayHA?.ownConferenceId != null && result.homeHA?.ownConferenceId != null && result.awayHA.ownConferenceId !== result.homeHA.ownConferenceId;
+                  return (
+                    <div>Vs {result.homeHA?.ownDivisionName || "división del rival"}{isInter ? " (interconferencia)" : ""}: <b style={{ color: "#FFB627" }}>{vsDiv ? `${vsDiv.w}-${vsDiv.l}` : "—"}</b></div>
+                  );
+                })()}
               </div>
               <div>
                 <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{game.homeName} · Local</div>
                 <div>En casa: <b style={{ color: "#FFB627" }}>{result.homeHA?.homeRecord ? `${result.homeHA.homeRecord.w}-${result.homeHA.homeRecord.l}` : "—"}</b></div>
+                {(() => {
+                  const oppDivId = result.awayHA?.ownDivisionId;
+                  const vsDiv = oppDivId != null ? result.homeHA?.recordByDivision?.[oppDivId] : null;
+                  const isInter = result.awayHA?.ownConferenceId != null && result.homeHA?.ownConferenceId != null && result.awayHA.ownConferenceId !== result.homeHA.ownConferenceId;
+                  return (
+                    <div>Vs {result.awayHA?.ownDivisionName || "división del rival"}{isInter ? " (interconferencia)" : ""}: <b style={{ color: "#FFB627" }}>{vsDiv ? `${vsDiv.w}-${vsDiv.l}` : "—"}</b></div>
+                  );
+                })()}
               </div>
             </div>
           </div>

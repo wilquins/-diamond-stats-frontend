@@ -1629,11 +1629,18 @@ function TodayGamesHeader() {
               <div className="grid grid-cols-2 gap-3">
                 {[{ code: selectedGame.awayCode, tag: "Visitante" }, { code: selectedGame.homeCode, tag: "Local" }].map(({ code, tag }) => {
                   const s = gameSituational[code];
+                  const opponentCode = code === selectedGame.homeCode ? selectedGame.awayCode : selectedGame.homeCode;
+                  const opponentS = gameSituational[opponentCode];
                   const todayWd = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"][new Date().getDay()];
                   const dn = s && selectedGame.dayNight ? (selectedGame.dayNight === "day" ? s.dayRecord : s.nightRecord) : null;
                   const wd = s?.byWeekday?.[todayWd];
                   const isHomeTeam = code === selectedGame.homeCode;
                   const relevantSplit = s ? (isHomeTeam ? s.homeRecord : s.awayRecord) : null;
+                  // Récord real de este equipo contra la división específica
+                  // del rival de HOY — no su récord general, sino cómo le ha
+                  // ido de verdad contra ese grupo de equipos esta temporada.
+                  const vsOpponentDivision = s && opponentS?.ownDivisionId != null ? s.recordByDivision?.[opponentS.ownDivisionId] : null;
+                  const isInterleague = s?.ownLeagueId != null && opponentS?.ownLeagueId != null && s.ownLeagueId !== opponentS.ownLeagueId;
                   return (
                     <div key={code} className="text-[11px]" style={{ color: "#8FA599" }}>
                       <div className="font-semibold mb-1" style={{ color: "#EDEAE1" }}>{code} · {tag}</div>
@@ -1641,6 +1648,9 @@ function TodayGamesHeader() {
                       <div>{selectedGame.dayNight === "day" ? "De día" : "De noche"}: <b style={{ color: "#C9D6CD" }}>{dn ? `${dn.w}-${dn.l}` : "—"}</b></div>
                       <div>{todayWd}: <b style={{ color: "#C9D6CD" }}>{wd ? `${wd.w}-${wd.l}` : "—"}</b></div>
                       <div>Últimos 10: <b style={{ color: "#FFB627" }}>{s?.last10Record ? `${s.last10Record.w}-${s.last10Record.l}` : "—"}</b></div>
+                      <div>
+                        Vs {opponentS?.ownDivisionName || "división del rival"}{isInterleague ? " (interliga)" : ""}: <b style={{ color: "#FFB627" }}>{vsOpponentDivision ? `${vsOpponentDivision.w}-${vsOpponentDivision.l}` : "—"}</b>
+                      </div>
                     </div>
                   );
                 })}
