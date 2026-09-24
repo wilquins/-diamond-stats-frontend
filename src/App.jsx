@@ -49,7 +49,7 @@ function HockeyIcon({ active }) {
 
 const SPORTS = [
   { id: "mlb", name: "MLB", Icon: BaseballIcon, ready: true, tagline: "Béisbol", stats: ["30 equipos en vivo", "Predicciones reales", "Backtesting real"] },
-  { id: "nfl", name: "NFL", Icon: FootballIcon, ready: true, tagline: "Fútbol americano", stats: ["Calendario real", "Tabla de posiciones", "Fase 1"] },
+  { id: "nfl", name: "NFL", Icon: FootballIcon, ready: true, tagline: "Fútbol americano", stats: ["Predicciones reales", "Fuerza de calendario", "Backtesting real"] },
   { id: "nba", name: "NBA", Icon: BasketballIcon, ready: false, tagline: "Básquetbol" },
   { id: "nhl", name: "NHL", Icon: HockeyIcon, ready: true, tagline: "Hockey", stats: ["Calendario real", "Tabla de posiciones", "Fase 1"] },
 ];
