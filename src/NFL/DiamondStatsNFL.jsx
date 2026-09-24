@@ -123,7 +123,22 @@ async function computeNflWinProb(home, away, weather, eventId) {
     if (adverse) weatherAdj = 0.02;
   }
 
-  let prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj + homeRoadAdj + weatherAdj;
+  // Fuerza real de calendario (Strength of Schedule) — el récord solo no
+  // dice si esos triunfos fueron contra rivales duros de otras divisiones
+  // o contra una división propia floja. Se calcula el win% real promedio
+  // de los rivales que cada equipo ya enfrentó, y se regresiona igual que
+  // todo lo demás con poca muestra de temporada.
+  let sosAdj = 0;
+  const [homeSOS, awaySOS] = await Promise.all([
+    fetch(`${BACKEND_URL}/api/nfl/team/${home.id}/strength-of-schedule`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/nfl/team/${away.id}/strength-of-schedule`).then((r) => r.json()).catch(() => null),
+  ]);
+  if (homeSOS?.avgOpponentWinPct != null && awaySOS?.avgOpponentWinPct != null) {
+    const sosAdjRaw = (homeSOS.avgOpponentWinPct - awaySOS.avgOpponentWinPct) * 0.3;
+    sosAdj = sosAdjRaw * Math.min(shrinkWeight(gamesHome), shrinkWeight(gamesAway));
+  }
+
+  let prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj + homeRoadAdj + weatherAdj + sosAdj;
 
   // FPI real de ESPN (su propio modelo, calibrado con años de fuerza de
   // roster) — se usa como referencia externa, con más peso cuanto menos
@@ -144,7 +159,10 @@ async function computeNflWinProb(home, away, weather, eventId) {
     prob = prob * ownWeight + fpiHomeProb * (1 - ownWeight);
   }
 
-  return { prob: Math.min(0.92, Math.max(0.08, prob)), diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h, homeHA, awayHA, fpiHomeProb };
+  return {
+    prob: Math.min(0.92, Math.max(0.08, prob)), diffAdj, turnoverAdj, h2hAdj, weatherAdj, h2h, homeHA, awayHA, fpiHomeProb,
+    homeSOS: homeSOS?.avgOpponentWinPct ?? null, awaySOS: awaySOS?.avgOpponentWinPct ?? null,
+  };
 }
 
 // ---- Aproximación de la CDF normal estándar (Abramowitz y Stegun) ----
@@ -560,11 +578,16 @@ function GameDetail({ game, onBack }) {
         <>
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-              Probabilidad de ganar (Log5 con Expectativa Pitagórica + localía + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima{result.fpiHomeProb != null ? " + FPI real de ESPN" : ""})
+              Probabilidad de ganar (Log5 con Expectativa Pitagórica + fuerza real de calendario + localía + diferencial de puntos + diferencial de balón + cara a cara + récord casa/ruta + clima{result.fpiHomeProb != null ? " + FPI real de ESPN" : ""})
             </div>
             {result.fpiHomeProb != null && (
               <p className="text-[10px] mb-2" style={{ color: "#5A7368" }}>
                 FPI real de ESPN para {game.homeName}: {(result.fpiHomeProb * 100).toFixed(1)}% — se mezcla con más peso cuanta menos muestra propia de esta temporada haya.
+              </p>
+            )}
+            {(result.homeSOS != null || result.awaySOS != null) && (
+              <p className="text-[10px] mb-2" style={{ color: "#5A7368" }}>
+                Fuerza de calendario real: {game.awayName} enfrentó rivales con {result.awaySOS != null ? `${(result.awaySOS * 100).toFixed(1)}%` : "—"} de win% promedio · {game.homeName} enfrentó rivales con {result.homeSOS != null ? `${(result.homeSOS * 100).toFixed(1)}%` : "—"} de win% promedio.
               </p>
             )}
             <div className="space-y-2.5">
