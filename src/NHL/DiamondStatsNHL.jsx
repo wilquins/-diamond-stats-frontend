@@ -335,6 +335,33 @@ function GameDetail({ game, onBack }) {
           );
         })()}
 
+        <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+            Over/Under estimado{overUnder ? ` · línea ${overUnder.line} goles` : ""}
+          </div>
+          {overUnder ? (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.overProb >= overUnder.underProb ? "#1A362A" : "#0F251C" }}>
+                  <span style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD" }}>Over {overUnder.line}</span>
+                  <span className="font-bold tabular-nums" style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.overProb * 100).toFixed(1)}%</span>
+                </div>
+                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.underProb > overUnder.overProb ? "#1A362A" : "#0F251C" }}>
+                  <span style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD" }}>Under {overUnder.line}</span>
+                  <span className="font-bold tabular-nums" style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.underProb * 100).toFixed(1)}%</span>
+                </div>
+              </div>
+              <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
+                Goles totales esperados: {overUnder.expectedTotal.toFixed(2)} — combina el ataque y la defensa reales de ambos equipos esta temporada de referencia{(goalies?.home?.stats || goalies?.away?.stats) ? ", ajustado por el save% real del portero titular confirmado" : ""}, pasado por una distribución de Poisson (mismo modelo que ya usamos en MLB).
+              </p>
+            </>
+          ) : (
+            <p className="text-[11px]" style={{ color: "#5A7368" }}>
+              Sin datos suficientes todavía — uno de los dos equipos no tiene juegos reales jugados en la temporada de referencia.
+            </p>
+          )}
+        </div>
+
         {teams?.home && teams?.away && (
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Récord real esta temporada de referencia</div>
@@ -387,33 +414,6 @@ function GameDetail({ game, onBack }) {
             </div>
           </div>
         )}
-
-        <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-            Over/Under estimado{overUnder ? ` · línea ${overUnder.line} goles` : ""}
-          </div>
-          {overUnder ? (
-            <>
-              <div className="grid grid-cols-2 gap-2">
-                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.overProb >= overUnder.underProb ? "#1A362A" : "#0F251C" }}>
-                  <span style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD" }}>Over {overUnder.line}</span>
-                  <span className="font-bold tabular-nums" style={{ color: overUnder.overProb >= overUnder.underProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.overProb * 100).toFixed(1)}%</span>
-                </div>
-                <div className="flex items-center justify-between text-xs p-2 rounded-md" style={{ background: overUnder.underProb > overUnder.overProb ? "#1A362A" : "#0F251C" }}>
-                  <span style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD" }}>Under {overUnder.line}</span>
-                  <span className="font-bold tabular-nums" style={{ color: overUnder.underProb > overUnder.overProb ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(overUnder.underProb * 100).toFixed(1)}%</span>
-                </div>
-              </div>
-              <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-                Goles totales esperados: {overUnder.expectedTotal.toFixed(2)} — combina el ataque y la defensa reales de ambos equipos esta temporada de referencia{(goalies?.home?.stats || goalies?.away?.stats) ? ", ajustado por el save% real del portero titular confirmado" : ""}, pasado por una distribución de Poisson (mismo modelo que ya usamos en MLB).
-              </p>
-            </>
-          ) : (
-            <p className="text-[11px]" style={{ color: "#5A7368" }}>
-              Sin datos suficientes todavía — uno de los dos equipos no tiene juegos reales jugados en la temporada de referencia.
-            </p>
-          )}
-        </div>
 
         <p className="text-[10px] leading-relaxed" style={{ color: "#5A7368" }}>
           Fase 2: portero titular real (confirmado por ESPN, cruzado con sus stats oficiales de NHL) + Over/Under con Poisson. Pendiente: backtesting real guardado en Supabase, para medir qué tan certero es el modelo — igual que ya existe en MLB y NFL.
