@@ -366,19 +366,30 @@ async function computeFullHomeWinProb(game) {
     ? clamped * 0.75 + espnPredictorHomeProb * 0.25
     : clamped;
 
-  // ---- Corrección de calibración real ----
-  // Con predicciones reales acumuladas se encontró sobreconfianza real
-  // en partidos con mucha ventaja para un lado — se corrige comprimiendo
-  // hacia el 50% (mitad del "exceso" de confianza).
+  // ---- Corrección de calibración real (v2 — temperature scaling) ----
+  // La corrección anterior (comprimir el "exceso" sobre 50% a la mitad,
+  // por igual en todo el rango) no alcanzaba: con 485 predicciones reales
+  // comparadas (desde el 15 sep), la calibración por rango de confianza
+  // mostró que el modelo está bien calibrado en 50-60% (dio 54.4%, ganó
+  // 50.5% real — diferencia de 3.9pp) pero cada vez MÁS sobreconfiado
+  // mientras más se aleja del 50%: 70-80% sobreconfiado por -15.9pp,
+  // 80-90% por -25.4pp, 90%+ por -20.1pp. Una compresión LINEAL (multiplicar
+  // el exceso por una constante fija) corrige por igual en todo el rango,
+  // así que no puede arreglar un problema que crece con la distancia al
+  // 50% — por eso el rango 50-60% ya estaba bien pero los extremos seguían
+  // mal, sin importar cuánto se ajustara la constante.
   //
-  // La corrección aplica a TODO el rango, sin condición — es simétrica
-  // y segura: en clamped=0.5 no hace nada (0.5+(0.5-0.5)*0.5=0.5), y en
-  // los extremos (0.08 y 0.92) comprime hacia 0.29 y 0.71 por igual. Un
-  // bug anterior (clamped > 0.3) solo corregía cuando el LOCAL era muy
-  // favorito, dejando sin corregir los casos donde el VISITANTE era muy
-  // favorito (clamped bajo, como 0.16) — encontrado real con MIL @ CIN,
-  // donde Milwaukee (visitante) mostraba 83.9% crudo sin corregir.
-  const correctedProb = 0.5 + (clampedWithEnsemble - 0.5) * 0.5;
+  // La solución real es comprimir en el espacio de log-odds (logit), no en
+  // el de probabilidad — dividir el logit entre una "temperatura" > 1 deja
+  // el centro (cerca de 50%) casi intacto pero aplasta los extremos mucho
+  // más mientras más lejos están de 50%, que es exactamente el patrón real
+  // que muestran los datos. Es la misma técnica ("temperature scaling") que
+  // se usa para calibrar modelos de machine learning sobreconfiados.
+  const logit = (p) => Math.log(p / (1 - p));
+  const sigmoid = (x) => 1 / (1 + Math.exp(-x));
+  const CALIBRATION_TEMPERATURE = 3.0;
+  const safeP = Math.min(0.985, Math.max(0.015, clampedWithEnsemble));
+  const correctedProb = sigmoid(logit(safeP) / CALIBRATION_TEMPERATURE);
   return { prob: correctedProb, rawProb: clampedWithEnsemble, espnPredictorHomeProb, homeSOS: homeSOS?.avgOpponentWinPct ?? null, awaySOS: awaySOS?.avgOpponentWinPct ?? null };
 }
 
@@ -2007,11 +2018,12 @@ function AccuracyView() {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando"); // "cargando" | "listo" | "error"
   const [checking, setChecking] = useState(false);
-  // Fecha real en que se aplicó la corrección de calibración (25 ago
-  // 2026) — confirmada por el primer lote de predicciones nuevas tras
-  // subir el cambio. Sirve para comparar limpio, sin mezclar viejo y
-  // nuevo en el mismo promedio.
-  const CALIBRATION_FIX_DATE = "2026-09-15";
+  // Fecha real en que se subió la corrección de calibración v2
+  // (temperature scaling en log-odds, reemplazando la compresión lineal
+  // anterior) — sirve para comparar limpio, sin mezclar el historial de
+  // ANTES de este cambio (que todavía mostraba sobreconfianza real de
+  // hasta -25.4pp en el rango 80-90%) con las predicciones nuevas.
+  const CALIBRATION_FIX_DATE = "2026-09-24";
   const [onlyRecent, setOnlyRecent] = useState(false);
 
   const load = (recentOnly) => {
