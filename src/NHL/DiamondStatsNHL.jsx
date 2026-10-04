@@ -788,13 +788,19 @@ function NhlPicksAccuracy() {
       {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
       {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
 
-      {status === "listo" && data && data.teams.total === 0 && data.goal.total === 0 && (
+      {status === "listo" && data && (!data.teams || !data.goal) && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          No se pudo leer la precisión de Picks del día todavía (puede ser que falte crear la tabla nhl_daily_picks en Supabase). El resto de la app sigue funcionando normal.
+        </p>
+      )}
+
+      {status === "listo" && data && data.teams && data.goal && data.teams.total === 0 && data.goal.total === 0 && (
         <p className="text-[13px]" style={{ color: "#8FA599" }}>
           Todavía no hay picks comparados contra resultados reales. La app guarda los picks del día automáticamente — vuelve en unos días y presiona "Revisar picks de días anteriores". El gol de jugador se revisa contra el boxscore real de la NHL — si esa parte falla por algún cambio de formato, el pick queda pendiente para la siguiente revisión en vez de romperse.
         </p>
       )}
 
-      {status === "listo" && data && (data.teams.total > 0 || data.goal.total > 0) && (
+      {status === "listo" && data && data.teams && data.goal && (data.teams.total > 0 || data.goal.total > 0) && (
         <>
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
