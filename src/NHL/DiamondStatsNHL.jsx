@@ -136,6 +136,41 @@ function computeNhlOverUnder(home, away, goalies) {
 }
 
 // ---- Lista de juegos de hoy ----
+// ---- Guarda automáticamente la predicción de cada juego de temporada
+// regular que TODAVÍA NO empieza, sin necesidad de abrir su detalle —
+// antes solo se guardaba al tocar cada juego, así que si no los abrías
+// uno por uno no se acumulaba backtesting. Solo juegos "FUT" (no
+// empezados): una predicción hecha con el juego ya en curso o terminado
+// usaría una tabla que ya incluye el resultado, y contaminaría la
+// precisión. El servidor ignora duplicados (la primera predicción gana).
+async function predictAndSaveGame(game, map) {
+  if (game.isPreseason || game.gameState !== "FUT") return;
+  const home = map[game.homeCode];
+  const away = map[game.awayCode];
+  if (!home || !away) return;
+  const gameDateET = new Date(game.startTimeUTC).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  const g = home.fullName && away.fullName
+    ? await fetch(`${BACKEND_URL}/api/nhl/goalies/${game.homeCode}/${game.awayCode}?date=${gameDateET}&homeName=${encodeURIComponent(home.fullName)}&awayName=${encodeURIComponent(away.fullName)}`)
+        .then((r) => r.json()).catch(() => null)
+    : null;
+  const r = await computeNhlWinProb(home, away, g);
+  const ou = computeNhlOverUnder(home, away, g);
+  if (r) {
+    await fetch(`${BACKEND_URL}/api/nhl/predictions/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_date: gameDateET, home_code: game.homeCode, away_code: game.awayCode, home_win_prob: r.prob }),
+    }).catch(() => {});
+  }
+  if (ou) {
+    await fetch(`${BACKEND_URL}/api/nhl/overunder/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ game_date: gameDateET, home_code: game.homeCode, away_code: game.awayCode, line: ou.line, over_prob: ou.overProb, expected_total: ou.expectedTotal }),
+    }).catch(() => {});
+  }
+}
+
 function GamesList({ onSelect }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
@@ -144,7 +179,19 @@ function GamesList({ onSelect }) {
     let cancelled = false;
     fetch(`${BACKEND_URL}/api/nhl/games`)
       .then((r) => r.json())
-      .then((d) => { if (!cancelled) { setData(d); setStatus("listo"); } })
+      .then(async (d) => {
+        if (cancelled) return;
+        setData(d);
+        setStatus("listo");
+        // Guardado automático de backtesting para todos los juegos de hoy
+        // que aún no empiezan (ver predictAndSaveGame).
+        const pending = (d.games || []).filter((g) => !g.isPreseason && g.gameState === "FUT");
+        if (pending.length > 0) {
+          const standingsData = await fetch(`${BACKEND_URL}/api/nhl/standings`).then((r) => r.json()).catch(() => ({ teams: [] }));
+          const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
+          await Promise.all(pending.map((g) => predictAndSaveGame(g, map).catch(() => {})));
+        }
+      })
       .catch(() => { if (!cancelled) setStatus("error"); });
     return () => { cancelled = true; };
   }, []);
@@ -244,14 +291,14 @@ function GameDetail({ game, onBack }) {
       // principio de backtesting honesto que ya usamos en MLB/NFL. Los
       // juegos de pretemporada NO se guardan: no miden nada real sobre la
       // fuerza real del equipo titular, y contaminarían la precisión.
-      if (!game.isPreseason && r) {
+      if (!game.isPreseason && game.gameState === "FUT" && r) {
         fetch(`${BACKEND_URL}/api/nhl/predictions/save`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ game_date: gameDateET, home_code: game.homeCode, away_code: game.awayCode, home_win_prob: r.prob }),
         }).catch(() => {});
       }
-      if (!game.isPreseason && ou) {
+      if (!game.isPreseason && game.gameState === "FUT" && ou) {
         fetch(`${BACKEND_URL}/api/nhl/overunder/save`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -748,6 +795,36 @@ function OverUnderAccuracy() {
   );
 }
 
+function NhlBacktestStatus() {
+  const [s, setS] = useState(null);
+  useEffect(() => {
+    fetch(`${BACKEND_URL}/api/nhl/backtest-status`).then((r) => r.json()).then(setS).catch(() => setS(null));
+  }, []);
+  if (!s || !s.predictions) return null;
+  const rows = [
+    ["Ganador", s.predictions],
+    ["Over/Under", s.overunder],
+    ["Picks del día", s.picks],
+  ];
+  return (
+    <div className="rounded-xl border p-4 mb-4" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Estado del guardado</div>
+      <div className="space-y-1">
+        {rows.map(([label, t]) => (
+          <div key={label} className="flex items-center justify-between text-[11px]">
+            <span style={{ color: "#C9D6CD" }}>{label}</span>
+            {t && t.exists ? (
+              <span style={{ color: "#8FA599" }}>{t.total} guardadas · {t.pending} esperando resultado</span>
+            ) : (
+              <span style={{ color: "#C8393E", fontWeight: 700 }}>tabla no existe en Supabase</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function NhlPicksAccuracy() {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
@@ -920,6 +997,7 @@ export default function DiamondStatsNHL({ onBackToMenu }) {
           <Standings />
         ) : (
           <>
+            <NhlBacktestStatus />
             <WinProbAccuracy />
             <NhlPicksAccuracy />
             <OverUnderAccuracy />
