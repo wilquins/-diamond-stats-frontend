@@ -424,6 +424,124 @@ function GameDetail({ game, onBack }) {
 }
 
 // ---- Tabla de posiciones real ----
+// ---- Picks del día: lo mejor de lo mejor, de los partidos pendientes de HOY ----
+function DayPicks() {
+  const [picks, setPicks] = useState(null);
+  const [status, setStatus] = useState("cargando");
+
+  useEffect(() => {
+    let cancelled = false;
+    setStatus("cargando");
+    (async () => {
+      const [gamesData, standingsData] = await Promise.all([
+        fetch(`${BACKEND_URL}/api/nhl/games`).then((r) => r.json()).catch(() => ({ games: [] })),
+        fetch(`${BACKEND_URL}/api/nhl/standings`).then((r) => r.json()).catch(() => ({ teams: [] })),
+      ]);
+      if (cancelled) return;
+      const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
+      // Solo temporada regular, todavía sin empezar — pretemporada no mide
+      // la fuerza real del equipo titular (mismo principio por el que no
+      // se guarda para backtesting).
+      const pendingGames = (gamesData.games || []).filter((g) => g.gameState === "FUT" && !g.isPreseason);
+
+      // Probabilidad de ganar de cada partido pendiente — sin portero
+      // titular aquí (consultarlo para todos los partidos de hoy sería muy
+      // pesado); el detalle completo con portero real sigue disponible al
+      // tocar cada partido específico.
+      const teamPicks = [];
+      for (const g of pendingGames) {
+        const home = map[g.homeCode];
+        const away = map[g.awayCode];
+        if (!home || !away) continue;
+        const r = await computeNhlWinProb(home, away, null);
+        if (r) {
+          const homeWins = r.prob >= 0.5;
+          teamPicks.push({
+            team: homeWins ? g.homeName : g.awayName,
+            teamCode: homeWins ? g.homeCode : g.awayCode,
+            opponent: homeWins ? g.awayName : g.homeName,
+            prob: Math.max(r.prob, 1 - r.prob),
+          });
+        }
+      }
+      teamPicks.sort((a, b) => b.prob - a.prob);
+
+      // Goleadores: consulta a todos los equipos con partido pendiente hoy.
+      const codesInvolved = new Set();
+      for (const g of pendingGames) {
+        codesInvolved.add(g.homeCode);
+        codesInvolved.add(g.awayCode);
+      }
+      const perTeamResults = await Promise.all(
+        [...codesInvolved].map(async (code) => {
+          const d = await fetch(`${BACKEND_URL}/api/nhl/team/${code}/skater-stats`).then((r) => r.json()).catch(() => ({ players: [] }));
+          return (d.players || []).map((p) => ({ ...p, team: code }));
+        })
+      );
+      const allPlayers = perTeamResults.flat();
+      const topGoal = [...allPlayers].sort((a, b) => b.goalProbability - a.goalProbability).slice(0, 3);
+      const topTeams = teamPicks.slice(0, 3);
+
+      // Guarda automáticamente equipo y gol para Precisión.
+      if (topTeams.length > 0 || topGoal.length > 0) {
+        const pickDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+        const nhlPicks = [
+          ...topTeams.map((t) => ({ pick_date: pickDate, pick_type: "team", player_id: null, player_name: t.team, team_code: t.teamCode, predicted_prob: t.prob })),
+          ...topGoal.map((p) => ({ pick_date: pickDate, pick_type: "goal", player_id: p.id || null, player_name: p.name, team_code: p.team || "", predicted_prob: p.goalProbability })),
+        ];
+        fetch(`${BACKEND_URL}/api/nhl/picks/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ picks: nhlPicks }),
+        }).catch(() => {});
+      }
+
+      if (!cancelled) {
+        setPicks({ topTeams, topGoal });
+        setStatus("listo");
+      }
+    })().catch(() => { if (!cancelled) setStatus("error"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (status === "cargando") return <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con datos reales de los partidos de hoy… puede tardar un poco.</p>;
+  if (status === "error") return <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>;
+  if (!picks) return null;
+
+  const sections = [
+    { label: "Mayor probabilidad de ganar hoy", items: picks.topTeams.map((t) => ({ name: `${t.teamCode} le gana a ${t.opponent}`, stat: `${(t.prob * 100).toFixed(1)}%` })) },
+    { label: "Mayor probabilidad de anotar gol hoy", items: picks.topGoal.map((p) => ({ name: `${p.name} (${p.position} · ${p.team})`, stat: `${(p.goalProbability * 100).toFixed(0)}% · ${p.gamesPlayed} PJ` })) },
+  ];
+
+  return (
+    <div className="space-y-4">
+      {sections.map((s) => (
+        <div key={s.label} className="p-3.5 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>{s.label}</div>
+          {s.items.length === 0 ? (
+            <p className="text-[11px]" style={{ color: "#5A7368" }}>Sin datos suficientes hoy — puede ser que no haya juegos de temporada regular programados.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {s.items.map((item, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                    {i + 1}
+                  </div>
+                  <span className="text-sm flex-1" style={{ color: "#EDEAE1" }}>{item.name}</span>
+                  <span className="text-sm font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{item.stat}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+      <p className="text-[10px] mt-2 leading-relaxed" style={{ color: "#5A7368" }}>
+        Lo mejor de lo mejor, entre TODOS los partidos pendientes de HOY — no solo uno. Con la temporada recién empezada, el goleador se calcula con muy pocos juegos reales todavía (se muestra "PJ" = partidos jugados, para que veas la muestra con la que se calculó — entre más avance la temporada, más confiable será ese número). El portero titular real de cada partido se ve al entrar a su detalle.
+      </p>
+    </div>
+  );
+}
+
 function Standings() {
   const [teams, setTeams] = useState(null);
   const [status, setStatus] = useState("cargando");
@@ -630,8 +748,86 @@ function OverUnderAccuracy() {
   );
 }
 
+function NhlPicksAccuracy() {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    fetch(`${BACKEND_URL}/api/nhl/picks/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/nhl/picks/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  return (
+    <div className="rounded-xl border p-6 mb-4" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>Backtesting real — Picks del día</div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>¿Qué tan certeros son los Picks del día?</h2>
+
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar picks de días anteriores"}
+      </button>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && data && data.teams.total === 0 && data.goal.total === 0 && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>
+          Todavía no hay picks comparados contra resultados reales. La app guarda los picks del día automáticamente — vuelve en unos días y presiona "Revisar picks de días anteriores". El gol de jugador se revisa contra el boxscore real de la NHL — si esa parte falla por algún cambio de formato, el pick queda pendiente para la siguiente revisión en vez de romperse.
+        </p>
+      )}
+
+      {status === "listo" && data && (data.teams.total > 0 || data.goal.total > 0) && (
+        <>
+          <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                {data.teams.accuracy != null ? `${(data.teams.accuracy * 100).toFixed(1)}%` : "—"}
+              </div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Equipos ({data.teams.total})</div>
+            </div>
+            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                {data.goal.accuracy != null ? `${(data.goal.accuracy * 100).toFixed(1)}%` : "—"}
+              </div>
+              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Gol ({data.goal.total})</div>
+            </div>
+          </div>
+          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Últimos picks comparados</div>
+          <div className="space-y-1.5">
+            {data.recent.map((r, i) => (
+              <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                <span style={{ color: "#C9D6CD" }}>{r.date} · {r.name} <span style={{ color: "#8FA599" }}>({r.team})</span></span>
+                <span style={{ color: "#8FA599" }}>{r.type === "team" ? "Equipo" : "Gol"} · {(r.prob * 100).toFixed(0)}%</span>
+                <span style={{ color: r.success ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>{r.success ? "✓ acertó" : "✗ falló"}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function DiamondStatsNHL({ onBackToMenu }) {
-  const [view, setView] = useState("juegos"); // "juegos" | "posiciones" | "precision"
+  const [view, setView] = useState("juegos"); // "juegos" | "picks" | "posiciones" | "precision"
   const [selectedGame, setSelectedGame] = useState(null);
 
   return (
@@ -673,6 +869,17 @@ export default function DiamondStatsNHL({ onBackToMenu }) {
               Juegos de hoy
             </button>
             <button
+              onClick={() => setView("picks")}
+              className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+              style={{
+                background: view === "picks" ? "#FFB627" : "#12281E",
+                color: view === "picks" ? "#0B1F17" : "#8FA599",
+                border: "1px solid " + (view === "picks" ? "#FFB627" : "#1F3D30"),
+              }}
+            >
+              Picks del día
+            </button>
+            <button
               onClick={() => setView("posiciones")}
               className="px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
               style={{
@@ -701,11 +908,14 @@ export default function DiamondStatsNHL({ onBackToMenu }) {
           <GameDetail game={selectedGame} onBack={() => setSelectedGame(null)} />
         ) : view === "juegos" ? (
           <GamesList onSelect={setSelectedGame} />
+        ) : view === "picks" ? (
+          <DayPicks />
         ) : view === "posiciones" ? (
           <Standings />
         ) : (
           <>
             <WinProbAccuracy />
+            <NhlPicksAccuracy />
             <OverUnderAccuracy />
           </>
         )}
