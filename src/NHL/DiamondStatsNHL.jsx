@@ -13,8 +13,9 @@ function log5(pctA, pctB) {
 // Ventaja real de jugar en casa en la NHL — fuente real: puntos% de local
 // (.585) vs. visitante (.524) en las temporadas 2021-22 a 2023-24
 // (https://soundofhockey.com/2025/02/02/is-there-really-a-home-ice-advantage-in-the-nhl/).
-// Se usa un ajuste moderado (3%) en línea con esa diferencia real, no un
-// número inventado.
+// Ahora la ventaja de casa se MIDE de los récords reales de la liga (ver
+// computeNhlWinProb); este 3% (en línea con esa fuente) solo se usa de
+// respaldo si el backend no trae el dato.
 const NHL_HOME_ADVANTAGE = 0.03;
 
 // El % de puntos (pointPctg) es la medida real de fuerza en NHL — a
@@ -54,6 +55,14 @@ function goalieEdge(savePct) {
 // varias horas antes del juego) o no se pudo cruzar con sus stats reales,
 // ese factor simplemente no se aplica — nunca se rellena con un número
 // inventado.
+// Mapa código -> equipo, con los promedios REALES de la liga (casa/ruta,
+// medidos por el backend) pegados a cada equipo, para poder descontar la
+// ventaja de casa de la liga en computeNhlWinProb.
+function buildNhlTeamMap(standingsData) {
+  const league = standingsData?.league || null;
+  return Object.fromEntries((standingsData?.teams || []).map((t) => [t.code, { ...t, league }]));
+}
+
 async function computeNhlWinProb(home, away, goalies) {
   if (!home || !away) return null;
 
@@ -65,12 +74,25 @@ async function computeNhlWinProb(home, away, goalies) {
   const awayL10 = pointsPct(away.l10Wins, away.l10Losses, away.l10OtLosses);
   const formAdj = homeL10 != null && awayL10 != null ? (homeL10 - awayL10) * 0.15 : 0;
 
+  // Casa/ruta propio de cada equipo, DESCONTANDO lo que ya cuenta la
+  // ventaja de casa de la liga: antes se sumaban las dos cosas y la
+  // ventaja de casa quedaba contada dos veces (medido: la liga ganó
+  // ~52.4% de local en 2025-26, o sea ~+2.4%, pero el modelo sumaba ~+6%).
+  // Peso 0.5 = decisión subjetiva.
+  const lg = home.league || null;
   const homeHomePct = pointsPct(home.homeWins, home.homeLosses, home.homeOtLosses);
   const awayRoadPct = pointsPct(away.roadWins, away.roadLosses, away.roadOtLosses);
   let homeRoadAdj = 0;
-  if (homeHomePct != null && awayRoadPct != null) {
-    homeRoadAdj = ((homeHomePct - homeStrength) - (awayRoadPct - awayStrength)) * 0.5;
+  if (homeHomePct != null && awayRoadPct != null && lg) {
+    const leagueHomeDelta = lg.homePtsPct - lg.overallPtsPct; // casa vs promedio, liga
+    const leagueRoadDelta = lg.roadPtsPct - lg.overallPtsPct; // ruta vs promedio, liga
+    const homeSpecific = (homeHomePct - homeStrength) - leagueHomeDelta;
+    const awaySpecific = (awayRoadPct - awayStrength) - leagueRoadDelta;
+    homeRoadAdj = (homeSpecific - awaySpecific) * 0.5;
   }
+  // Ventaja de casa de la liga: % de victorias de local MEDIDO de los
+  // récords reales (si el backend no lo trae, la constante citada).
+  const homeAdvantage = lg ? lg.homeWinRate - 0.5 : NHL_HOME_ADVANTAGE;
 
   const [homeSchedule, awaySchedule] = await Promise.all([
     fetch(`${BACKEND_URL}/api/nhl/team/${home.code}/schedule-analysis`).then((r) => r.json()).catch(() => null),
@@ -86,8 +108,8 @@ async function computeNhlWinProb(home, away, goalies) {
   // MENOS el portero visitante, ambos frente al mismo promedio de liga.
   const goalieAdj = goalieEdge(goalies?.home?.stats?.savePercentage) - goalieEdge(goalies?.away?.stats?.savePercentage);
 
-  const prob = Math.min(0.92, Math.max(0.08, baseProb + NHL_HOME_ADVANTAGE + formAdj + homeRoadAdj + sosAdj + goalieAdj));
-  return { prob, formAdj, homeRoadAdj, sosAdj, goalieAdj, homeSchedule, awaySchedule };
+  const prob = Math.min(0.92, Math.max(0.08, baseProb + homeAdvantage + formAdj + homeRoadAdj + sosAdj + goalieAdj));
+  return { prob, homeAdvantage, formAdj, homeRoadAdj, sosAdj, goalieAdj, homeSchedule, awaySchedule };
 }
 
 // ---- Distribución de Poisson — mismo modelo que ya usamos en MLB para
@@ -265,7 +287,7 @@ function GamesList({ onSelect }) {
         const pending = (d.games || []).filter((g) => !g.isPreseason && g.gameState === "FUT");
         if (pending.length > 0) {
           const standingsData = await fetch(`${BACKEND_URL}/api/nhl/standings`).then((r) => r.json()).catch(() => ({ teams: [] }));
-          const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
+          const map = buildNhlTeamMap(standingsData);
           await Promise.all(pending.map((g) => predictAndSaveGame(g, map).catch(() => {})));
         }
       })
@@ -339,7 +361,7 @@ function GameDetail({ game, onBack }) {
     (async () => {
       const standingsData = await fetch(`${BACKEND_URL}/api/nhl/standings`).then((r) => r.json()).catch(() => ({ teams: [] }));
       if (cancelled) return;
-      const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
+      const map = buildNhlTeamMap(standingsData);
       const home = map[game.homeCode];
       const away = map[game.awayCode];
       setTeams({ home, away });
@@ -564,7 +586,7 @@ function DayPicks() {
         fetch(`${BACKEND_URL}/api/nhl/standings`).then((r) => r.json()).catch(() => ({ teams: [] })),
       ]);
       if (cancelled) return;
-      const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
+      const map = buildNhlTeamMap(standingsData);
       // Solo temporada regular, todavía sin empezar — pretemporada no mide
       // la fuerza real del equipo titular (mismo principio por el que no
       // se guarda para backtesting).
