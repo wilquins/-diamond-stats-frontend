@@ -321,10 +321,6 @@ function GamesList({ onSelect }) {
           </button>
         ))}
       </div>
-      <TopPlayersPanel
-        title="Jugadores más probables hoy"
-        teamCodes={[...new Set(data.games.filter((g) => !g.isPreseason && g.gameState !== "OFF" && g.gameState !== "FINAL").flatMap((g) => [g.homeCode, g.awayCode]))]}
-      />
     </div>
   );
 }
@@ -543,7 +539,7 @@ function GameDetail({ game, onBack }) {
           </div>
         )}
 
-        <TopPlayersPanel title="Jugadores más probables de este juego" teamCodes={[game.homeCode, game.awayCode]} />
+        <TopPlayersPanel title="Picks de este juego" teamCodes={[game.homeCode, game.awayCode]} />
 
         <p className="text-[10px] leading-relaxed" style={{ color: "#5A7368" }}>
           Fase 2: portero titular real (confirmado por ESPN, cruzado con sus stats oficiales de NHL) + Over/Under con Poisson. Pendiente: backtesting real guardado en Supabase, para medir qué tan certero es el modelo — igual que ya existe en MLB y NFL.
