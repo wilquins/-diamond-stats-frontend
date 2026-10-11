@@ -470,6 +470,146 @@ function GameDetail({ game, onBack }) {
   );
 }
 
+// ---- Picks del día (mismo formato que MLB/NHL) ----
+// Equipos: mismo modelo que el detalle de cada juego. Jugadores: frecuencia
+// REAL de la temporada (dobles-dobles ÷ juegos), de los jugadores de los
+// equipos con juego pendiente hoy, sin los reportados "Fuera" por ESPN.
+function DayPicks() {
+  const [picks, setPicks] = useState(null);
+  const [status, setStatus] = useState("cargando");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const gamesData = await fetch(`${BACKEND_URL}/api/nba/games`).then((r) => r.json()).catch(() => ({ games: [] }));
+      if (cancelled) return;
+      const date = gamesData.date;
+      const pending = (gamesData.games || []).filter((g) => !g.isPreseason && isScheduled(g));
+      if (pending.length === 0) { setPicks({ none: true }); setStatus("listo"); return; }
+
+      const base = await loadContext();
+      const played = await fetchRest(date);
+      const teamPicks = [];
+      for (const g of pending) {
+        const home = base.byId[String(g.homeId)] || base.byCode[g.homeCode];
+        const away = base.byId[String(g.awayId)] || base.byCode[g.awayCode];
+        if (!home || !away) continue;
+        const r = await computeNbaWinProb(home, away, {
+          leagueHomeWinPct: base.leagueHomeWinPct,
+          homeB2B: played.includes(g.homeCode),
+          awayB2B: played.includes(g.awayCode),
+        });
+        if (!r) continue;
+        const homeWins = r.prob >= 0.5;
+        teamPicks.push({
+          team: homeWins ? g.homeName : g.awayName,
+          teamCode: homeWins ? g.homeCode : g.awayCode,
+          opponent: homeWins ? g.awayName : g.homeName,
+          prob: Math.max(r.prob, 1 - r.prob),
+        });
+      }
+      teamPicks.sort((a, b) => b.prob - a.prob);
+
+      const teamsToday = [];
+      for (const g of pending) {
+        teamsToday.push({ id: g.homeId, code: g.homeCode }, { id: g.awayId, code: g.awayCode });
+      }
+      const perTeam = await Promise.all(
+        teamsToday.map(async (t) => {
+          const d = await fetch(`${BACKEND_URL}/api/nba/team/${t.id}/players`).then((r) => r.json()).catch(() => ({ players: [] }));
+          return (d.players || []).map((p) => ({ ...p, team: t.code }));
+        })
+      );
+      if (cancelled) return;
+      const eligible = perTeam.flat().filter((p) => p.hasStats && p.status !== "Out");
+      const topBy = (key) =>
+        eligible
+          .filter((p) => p[key] != null && p[key] > 0)
+          .sort((a, b) => b[key] - a[key] || b.gamesPlayed - a.gamesPlayed || (a.name || "").localeCompare(b.name || ""))
+          .slice(0, 3);
+      const topTeams = teamPicks.slice(0, 3);
+      const topDD = topBy("doubleDoubleProb");
+      const topTD = topBy("tripleDoubleProb");
+
+      if (topTeams.length || topDD.length || topTD.length) {
+        const rows = [
+          ...topTeams.map((t) => ({ pick_date: date, pick_type: "team", player_id: null, player_name: t.team, team_code: t.teamCode, predicted_prob: t.prob })),
+          ...topDD.map((p) => ({ pick_date: date, pick_type: "dd", player_id: p.id, player_name: p.name, team_code: p.team, predicted_prob: p.doubleDoubleProb })),
+          ...topTD.map((p) => ({ pick_date: date, pick_type: "td", player_id: p.id, player_name: p.name, team_code: p.team, predicted_prob: p.tripleDoubleProb })),
+        ];
+        fetch(`${BACKEND_URL}/api/nba/picks/save`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ picks: rows }),
+        }).catch(() => {});
+      }
+
+      if (!cancelled) { setPicks({ topTeams, topDD, topTD }); setStatus("listo"); }
+    })().catch(() => { if (!cancelled) setStatus("error"); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (status === "cargando") return <p className="text-[11px]" style={{ color: "#8FA599" }}>Calculando con datos reales de los partidos de hoy… puede tardar un poco.</p>;
+  if (status === "error") return <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>;
+  if (!picks) return null;
+  if (picks.none) {
+    return (
+      <p className="text-[13px]" style={{ color: "#8FA599" }}>
+        No hay juegos de temporada regular pendientes hoy. Los picks se calculan solo para temporada regular (la pretemporada no mide la fuerza real y no se guarda para precisión).
+      </p>
+    );
+  }
+
+  const fmtDD = (p) => `${p.team} · ${p.position || "—"} · ${p.avgPoints?.toFixed(1)} pts, ${p.avgRebounds?.toFixed(1)} reb, ${p.avgAssists?.toFixed(1)} ast en ${p.gamesPlayed} PJ${p.season ? ` (temporada ${p.season - 1}-${String(p.season).slice(2)})` : ""}${p.status === "Day-To-Day" ? " · DUDOSO" : ""}`;
+  const sections = [
+    {
+      header: "Picks del día · equipos",
+      title: "Mayor probabilidad de ganar hoy",
+      items: picks.topTeams.map((t) => ({ key: t.teamCode, name: t.team, sub: `le gana a ${t.opponent}`, pct: t.prob })),
+      note: "Mismo modelo que el detalle de cada juego (Log5 sobre Expectativa Pitagórica + ventaja de casa + forma + casa/ruta + calendario + descanso + lesiones reales).",
+    },
+    {
+      header: "Picks del día · jugadores",
+      title: "Mayor probabilidad de doble-doble hoy",
+      items: picks.topDD.map((p) => ({ key: p.id, name: p.name, sub: fmtDD(p), pct: p.doubleDoubleProb })),
+    },
+    {
+      header: "Picks del día · jugadores",
+      title: "Mayor probabilidad de triple-doble hoy",
+      items: picks.topTD.map((p) => ({ key: p.id, name: p.name, sub: fmtDD(p), pct: p.tripleDoubleProb })),
+    },
+  ];
+  const playerNote = 'Probabilidad = frecuencia REAL de la temporada (dobles-dobles ÷ juegos jugados), de los jugadores de equipos con juego hoy, sin los reportados "Fuera" por ESPN (con 20+ juegos). No se ajusta por el rival ni por los minutos de hoy. "Dudoso" = ESPN lo lista Day-To-Day. Pendiente (Fase 3b): puntos/rebotes/asistencias por umbral, que necesitan el registro juego por juego.';
+
+  return (
+    <div className="space-y-6">
+      {sections.map((sec) => (
+        <div key={sec.title} className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+          <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>{sec.header}</div>
+          <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>{sec.title}</h2>
+          {sec.items.length === 0 ? (
+            <p className="text-[11px]" style={{ color: "#8FA599" }}>Sin datos suficientes hoy.</p>
+          ) : (
+            <div className="space-y-3">
+              {sec.items.map((item, i) => (
+                <div key={item.key + "-" + i} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{i + 1}</div>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{item.name}</div>
+                    <div className="text-[11px]" style={{ color: "#8FA599" }}>{item.sub}</div>
+                  </div>
+                  <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{(item.pct * 100).toFixed(1)}%</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>{sec.note || playerNote}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ---- Tabla de posiciones real ----
 function Standings() {
   const [data, setData] = useState(null);
@@ -541,6 +681,16 @@ function NbaBacktestStatus() {
           <span style={{ color: "#C8393E", fontWeight: 700 }}>tabla no existe en Supabase</span>
         )}
       </div>
+      {s.picks && (
+        <div className="flex items-center justify-between text-[11px] mt-1.5">
+          <span style={{ color: "#C9D6CD" }}>Picks del día</span>
+          {s.picks.exists ? (
+            <span style={{ color: "#8FA599" }}>{s.picks.total} guardadas · {s.picks.pending} esperando resultado</span>
+          ) : (
+            <span style={{ color: "#C8393E", fontWeight: 700 }}>tabla no existe en Supabase</span>
+          )}
+        </div>
+      )}
       {s.overunder && (
         <div className="flex items-center justify-between text-[11px] mt-1.5">
           <span style={{ color: "#C9D6CD" }}>Over/Under</span>
@@ -700,12 +850,84 @@ function OverUnderAccuracy() {
   );
 }
 
+function NbaPicksAccuracy() {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    fetch(`${BACKEND_URL}/api/nba/picks/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+  useEffect(() => { load(); }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/nba/picks/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  const tile = (label, t) => (
+    <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+      <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+        {t && t.total > 0 ? `${(t.accuracy * 100).toFixed(0)}%` : "—"}
+      </div>
+      <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>{label}</div>
+      <div className="text-[10px] mt-0.5" style={{ color: "#5A7368" }}>{t ? t.total : 0} revisados</div>
+    </div>
+  );
+
+  return (
+    <div className="rounded-xl border p-6 mb-4" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>Backtesting real — Picks del día</div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>¿Aciertan los picks?</h2>
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar picks de días anteriores"}
+      </button>
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+      {status === "listo" && data && (
+        <>
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            {tile("Equipos", data.teams)}
+            {tile("Doble-doble", data.dd)}
+            {tile("Triple-doble", data.td)}
+          </div>
+          {data.voided > 0 && (
+            <p className="text-[10px] mb-3" style={{ color: "#5A7368" }}>{data.voided} picks de jugadores que no jugaron no cuentan ni a favor ni en contra.</p>
+          )}
+          <div className="space-y-1.5">
+            {(data.recent || []).map((r, i) => (
+              <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                <span style={{ color: "#C9D6CD" }}>{r.date} · {r.type === "team" ? "Equipo" : r.type === "dd" ? "Doble-doble" : "Triple-doble"} · {r.name}</span>
+                <span style={{ color: "#8FA599" }}>{(r.prob * 100).toFixed(0)}%</span>
+                <span style={{ color: r.success ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>{r.success ? "✓" : "✗"}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function DiamondStatsNBA({ onBackToMenu }) {
   const [view, setView] = useState("juegos"); // "juegos" | "posiciones" | "precision"
   const [selectedGame, setSelectedGame] = useState(null);
 
   const tabs = [
     ["juegos", "Juegos de hoy"],
+    ["picks", "Picks del día"],
     ["posiciones", "Tabla de posiciones"],
     ["precision", "Precisión"],
   ];
@@ -717,7 +939,7 @@ export default function DiamondStatsNBA({ onBackToMenu }) {
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full" style={{ background: "#C8393E" }} />
             <span className="text-[11px] tracking-[0.25em] uppercase" style={{ color: "#8FA599", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
-              NBA Analytics — Fase 2
+              NBA Analytics — Fase 3
             </span>
             {onBackToMenu && (
               <button
@@ -758,6 +980,8 @@ export default function DiamondStatsNBA({ onBackToMenu }) {
           <GameDetail game={selectedGame} onBack={() => setSelectedGame(null)} />
         ) : view === "juegos" ? (
           <GamesList onSelect={setSelectedGame} />
+        ) : view === "picks" ? (
+          <DayPicks />
         ) : view === "posiciones" ? (
           <Standings />
         ) : (
@@ -765,12 +989,13 @@ export default function DiamondStatsNBA({ onBackToMenu }) {
             <NbaBacktestStatus />
             <WinProbAccuracy />
             <OverUnderAccuracy />
+            <NbaPicksAccuracy />
           </>
         )}
 
         {!selectedGame && (
           <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
-            Fase 2: probabilidad real con Log5 sobre la Expectativa Pitagórica (exponente 13.91) + ventaja de casa medida + forma reciente + casa/ruta + calendario + back-to-back + lesiones reales de ESPN, más Over/Under, con backtesting real guardado. Pendiente: alineación confirmada y Picks del día de jugadores. Ahora mismo solo hay pretemporada (no se guarda para precisión), así que los récords usados son los de la última temporada completa.
+            Fase 2: probabilidad real con Log5 sobre la Expectativa Pitagórica (exponente 13.91) + ventaja de casa medida + forma reciente + casa/ruta + calendario + back-to-back + lesiones reales de ESPN, más Over/Under, con backtesting real guardado. Fase 3: Picks del día con equipos, doble-doble y triple-doble (frecuencias reales de la temporada). Pendiente: alineación confirmada y picks de puntos/rebotes/asistencias por umbral. Ahora mismo solo hay pretemporada (no se guarda para precisión), así que los récords usados son los de la última temporada completa.
           </p>
         )}
       </div>
