@@ -63,16 +63,50 @@ function buildNhlTeamMap(standingsData) {
   return Object.fromEntries((standingsData?.teams || []).map((t) => [t.code, { ...t, league }]));
 }
 
+// Regresión a la media con la temporada anterior (Fase 2 del modelo NHL).
+// Con 5-6 juegos jugados, un % de puntos de .900 es sobre todo suerte. Cifra
+// citada: ~38% de las diferencias en la tabla de una temporada de 82 juegos
+// es pura suerte (Desjardins 38%, Weissbock 37.6% —
+// https://thefivehohl.substack.com/p/what-does-regression-to-the-mean). Con
+// eso, la confiabilidad tras n juegos es n/(n+k) con k = 82×0.38/0.62 ≈ 50
+// juegos (DERIVADO de esas cifras, no medido por mí). El prior de cada
+// equipo es su % de puntos de la temporada pasada completa, encogido hacia
+// .500 con la misma confiabilidad de 82 juegos (82/132 ≈ 0.62). Límites:
+// k=50 se derivó para regresar a la media de la liga; usarlo con el prior
+// propio del equipo es una aproximación, y NO se descuenta por cambios de
+// plantilla (no hay dato para estimarlo).
+const NHL_REGRESSION_GAMES = 50;
+const NHL_PRIOR_RELIABILITY = 82 / (82 + NHL_REGRESSION_GAMES);
+function blendedStrength(t) {
+  const cur = t.pointPctg ?? 0.5;
+  const gp = t.gamesPlayed ?? 0;
+  const priorRaw = t.prior?.pointPctg;
+  if (priorRaw == null || gp >= 200) return { value: cur, priorWeight: 0 };
+  const prior = 0.5 + NHL_PRIOR_RELIABILITY * (priorRaw - 0.5);
+  const priorWeight = NHL_REGRESSION_GAMES / (gp + NHL_REGRESSION_GAMES);
+  return { value: (1 - priorWeight) * cur + priorWeight * prior, priorWeight };
+}
+
 async function computeNhlWinProb(home, away, goalies) {
   if (!home || !away) return null;
 
-  const homeStrength = home.pointPctg ?? 0.5;
-  const awayStrength = away.pointPctg ?? 0.5;
+  // Fuerza base: % de puntos de esta temporada mezclado con el de la pasada
+  // según cuántos juegos van. Para casa/ruta se usa el % de puntos CRUDO de
+  // esta temporada, porque se compara contra récords de esta temporada.
+  const homeBlend = blendedStrength(home);
+  const awayBlend = blendedStrength(away);
+  const homeStrength = homeBlend.value;
+  const awayStrength = awayBlend.value;
+  const homeRaw = home.pointPctg ?? 0.5;
+  const awayRaw = away.pointPctg ?? 0.5;
   const baseProb = log5(homeStrength, awayStrength);
+  const minGP = Math.min(home.gamesPlayed ?? 0, away.gamesPlayed ?? 0);
 
   const homeL10 = pointsPct(home.l10Wins, home.l10Losses, home.l10OtLosses);
   const awayL10 = pointsPct(away.l10Wins, away.l10Losses, away.l10OtLosses);
-  const formAdj = homeL10 != null && awayL10 != null ? (homeL10 - awayL10) * 0.15 : 0;
+  // Con menos de 10 juegos, "últimos 10" es la temporada entera y ya está en
+  // la fuerza base: sumarlo contaría la misma información dos veces.
+  const formAdj = homeL10 != null && awayL10 != null && minGP >= 10 ? (homeL10 - awayL10) * 0.15 : 0;
 
   // Casa/ruta propio de cada equipo, DESCONTANDO lo que ya cuenta la
   // ventaja de casa de la liga: antes se sumaban las dos cosas y la
@@ -86,9 +120,11 @@ async function computeNhlWinProb(home, away, goalies) {
   if (homeHomePct != null && awayRoadPct != null && lg) {
     const leagueHomeDelta = lg.homePtsPct - lg.overallPtsPct; // casa vs promedio, liga
     const leagueRoadDelta = lg.roadPtsPct - lg.overallPtsPct; // ruta vs promedio, liga
-    const homeSpecific = (homeHomePct - homeStrength) - leagueHomeDelta;
-    const awaySpecific = (awayRoadPct - awayStrength) - leagueRoadDelta;
-    homeRoadAdj = (homeSpecific - awaySpecific) * 0.5;
+    const homeSpecific = (homeHomePct - homeRaw) - leagueHomeDelta;
+    const awaySpecific = (awayRoadPct - awayRaw) - leagueRoadDelta;
+    // Con pocos juegos el récord casa/ruta es casi puro ruido: se escala por
+    // min(1, juegos/30) (decisión SUBJETIVA, mismo criterio que NFL).
+    homeRoadAdj = (homeSpecific - awaySpecific) * 0.5 * Math.min(1, minGP / 30);
   }
   // Ventaja de casa de la liga: % de victorias de local MEDIDO de los
   // récords reales (si el backend no lo trae, la constante citada).
@@ -100,7 +136,7 @@ async function computeNhlWinProb(home, away, goalies) {
   ]);
   let sosAdj = 0;
   if (homeSchedule?.avgOpponentWinPct != null && awaySchedule?.avgOpponentWinPct != null) {
-    sosAdj = (homeSchedule.avgOpponentWinPct - awaySchedule.avgOpponentWinPct) * 0.3;
+    sosAdj = (homeSchedule.avgOpponentWinPct - awaySchedule.avgOpponentWinPct) * 0.3 * Math.min(1, minGP / 30);
   }
 
   // El portero del LOCAL detiene tiros del ataque visitante y viceversa —
@@ -109,7 +145,7 @@ async function computeNhlWinProb(home, away, goalies) {
   const goalieAdj = goalieEdge(goalies?.home?.stats?.savePercentage) - goalieEdge(goalies?.away?.stats?.savePercentage);
 
   const prob = Math.min(0.92, Math.max(0.08, baseProb + homeAdvantage + formAdj + homeRoadAdj + sosAdj + goalieAdj));
-  return { prob, homeAdvantage, formAdj, homeRoadAdj, sosAdj, goalieAdj, homeSchedule, awaySchedule };
+  return { prob, homeAdvantage, formAdj, homeRoadAdj, sosAdj, goalieAdj, homeSchedule, awaySchedule, homeStrength, awayStrength, homeRaw, awayRaw, homePriorWeight: homeBlend.priorWeight, awayPriorWeight: awayBlend.priorWeight };
 }
 
 // ---- Distribución de Poisson — mismo modelo que ya usamos en MLB para
@@ -452,6 +488,11 @@ function GameDetail({ game, onBack }) {
               <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
                 Probabilidad de ganar (Log5 sobre % de puntos real + ventaja de casa + forma reciente + récord casa/ruta + fuerza real de calendario{(goalies?.home?.stats || goalies?.away?.stats) ? " + portero titular real" : ""})
               </div>
+              {(result.homePriorWeight > 0 || result.awayPriorWeight > 0) && (
+                <p className="text-[10px] mb-2" style={{ color: "#5A7368" }}>
+                  Fuerza base mezclada con la temporada pasada (pocos juegos jugados): {game.awayName} {(result.awayRaw * 100).toFixed(1)}% actual → {(result.awayStrength * 100).toFixed(1)}% usado ({(result.awayPriorWeight * 100).toFixed(0)}% peso de la temporada pasada) · {game.homeName} {(result.homeRaw * 100).toFixed(1)}% actual → {(result.homeStrength * 100).toFixed(1)}% usado ({(result.homePriorWeight * 100).toFixed(0)}% peso de la temporada pasada). La constante (50 juegos) se derivó de que ~38% de la tabla es suerte; no se descuentan cambios de plantilla.
+                </p>
+              )}
               {(result.homeSchedule?.avgOpponentWinPct != null || result.awaySchedule?.avgOpponentWinPct != null) && (
                 <p className="text-[10px] mb-2" style={{ color: "#5A7368" }}>
                   Fuerza de calendario real: {game.awayName} enfrentó rivales con {result.awaySchedule?.avgOpponentWinPct != null ? `${(result.awaySchedule.avgOpponentWinPct * 100).toFixed(1)}%` : "—"} de % de puntos promedio · {game.homeName} enfrentó rivales con {result.homeSchedule?.avgOpponentWinPct != null ? `${(result.homeSchedule.avgOpponentWinPct * 100).toFixed(1)}%` : "—"} de % de puntos promedio.
