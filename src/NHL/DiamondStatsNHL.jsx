@@ -171,6 +171,82 @@ async function predictAndSaveGame(game, map) {
   }
 }
 
+// ---- Jugadores más probables a gol / asistencia / punto ----
+// Probabilidad real de al menos 1 gol, 1 asistencia o 1 punto vía Poisson
+// sobre su tasa real por juego esta temporada (mismo principio que TD en
+// NFL y jonrón en MLB). Se muestra "PJ" (partidos jugados) porque con la
+// temporada recién empezada la muestra es chica y el número es ruidoso.
+function TopPlayersPanel({ teamCodes, title }) {
+  const [players, setPlayers] = useState(null);
+  const codesKey = [...teamCodes].sort().join(",");
+
+  useEffect(() => {
+    let cancelled = false;
+    setPlayers(null);
+    (async () => {
+      const perTeam = await Promise.all(
+        codesKey.split(",").filter(Boolean).map(async (code) => {
+          const d = await fetch(`${BACKEND_URL}/api/nhl/team/${code}/skater-stats`).then((r) => r.json()).catch(() => ({ players: [] }));
+          return (d.players || []).map((p) => ({ ...p, team: code }));
+        })
+      );
+      if (!cancelled) setPlayers(perTeam.flat());
+    })();
+    return () => { cancelled = true; };
+  }, [codesKey]);
+
+  if (!codesKey) return null;
+  if (!players) return <p className="text-[11px] mb-4" style={{ color: "#8FA599" }}>Calculando jugadores más probables…</p>;
+
+  // Desempate fijo (más partidos jugados, luego nombre) para que el orden
+  // no cambie entre pantallas cuando hay empates exactos.
+  const top = (key) =>
+    [...players]
+      .sort((a, b) => b[key] - a[key] || b.gamesPlayed - a.gamesPlayed || a.name.localeCompare(b.name))
+      .slice(0, 3);
+  const sections = [
+    { label: "Más probable a anotar gol", key: "goalProbability" },
+    { label: "Más probable a dar asistencia", key: "assistProbability" },
+    { label: "Más probable a sumar punto (gol o asistencia)", key: "pointProbability" },
+  ];
+
+  return (
+    <div className="mt-6 mb-4">
+      <div className="text-[11px] tracking-widest uppercase mb-3" style={{ color: "#8FA599" }}>{title}</div>
+      <div className="space-y-3">
+        {sections.map((sec) => {
+          const items = top(sec.key);
+          return (
+            <div key={sec.key} className="p-3.5 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+              <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>{sec.label}</div>
+              {items.length === 0 ? (
+                <p className="text-[11px]" style={{ color: "#5A7368" }}>Sin datos reales suficientes todavía.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {items.map((p, i) => (
+                    <div key={p.id} className="flex items-center gap-2">
+                      <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                        {i + 1}
+                      </div>
+                      <span className="text-sm flex-1" style={{ color: "#EDEAE1" }}>{p.name} <span style={{ color: "#8FA599", fontSize: "11px" }}>({p.position} · {p.team})</span></span>
+                      <span className="text-sm font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                        {(p[sec.key] * 100).toFixed(0)}% <span style={{ color: "#5A7368", fontSize: "10px", fontWeight: 400 }}>· {p.gamesPlayed} PJ</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[10px] mt-2 leading-relaxed" style={{ color: "#5A7368" }}>
+        Probabilidad real de al menos 1 por juego, calculada con la tasa real de cada jugador esta temporada. "PJ" = partidos jugados: con pocos, el número es ruidoso y mejora conforme avance la temporada.
+      </p>
+    </div>
+  );
+}
+
 function GamesList({ onSelect }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
@@ -244,6 +320,10 @@ function GamesList({ onSelect }) {
           </button>
         ))}
       </div>
+      <TopPlayersPanel
+        title="Jugadores más probables hoy"
+        teamCodes={[...new Set(data.games.filter((g) => !g.isPreseason && g.gameState !== "OFF" && g.gameState !== "FINAL").flatMap((g) => [g.homeCode, g.awayCode]))]}
+      />
     </div>
   );
 }
@@ -461,6 +541,8 @@ function GameDetail({ game, onBack }) {
             </div>
           </div>
         )}
+
+        <TopPlayersPanel title="Jugadores más probables de este juego" teamCodes={[game.homeCode, game.awayCode]} />
 
         <p className="text-[10px] leading-relaxed" style={{ color: "#5A7368" }}>
           Fase 2: portero titular real (confirmado por ESPN, cruzado con sus stats oficiales de NHL) + Over/Under con Poisson. Pendiente: backtesting real guardado en Supabase, para medir qué tan certero es el modelo — igual que ya existe en MLB y NFL.
