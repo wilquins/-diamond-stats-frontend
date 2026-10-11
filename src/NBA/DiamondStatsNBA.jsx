@@ -530,6 +530,15 @@ function DayPicks() {
       const topTeams = teamPicks.slice(0, 3);
       const topDD = topBy("doubleDoubleProb");
       const topTD = topBy("tripleDoubleProb");
+      // Rebotes / asistencias: promedio REAL por juego de la temporada (no una
+      // probabilidad: no hay distribución verificada para convertirlo).
+      const topAvg = (key) =>
+        [...eligible]
+          .filter((p) => p[key] != null)
+          .sort((a, b) => b[key] - a[key] || b.gamesPlayed - a.gamesPlayed || (a.name || "").localeCompare(b.name || ""))
+          .slice(0, 3);
+      const topReb = topAvg("avgRebounds");
+      const topAst = topAvg("avgAssists");
 
       if (topTeams.length || topDD.length || topTD.length) {
         const rows = [
@@ -544,7 +553,7 @@ function DayPicks() {
         }).catch(() => {});
       }
 
-      if (!cancelled) { setPicks({ topTeams, topDD, topTD }); setStatus("listo"); }
+      if (!cancelled) { setPicks({ topTeams, topDD, topTD, topReb, topAst }); setStatus("listo"); }
     })().catch(() => { if (!cancelled) setStatus("error"); });
     return () => { cancelled = true; };
   }, []);
@@ -561,6 +570,8 @@ function DayPicks() {
   }
 
   const fmtDD = (p) => `${p.team} · ${p.position || "—"} · ${p.avgPoints?.toFixed(1)} pts, ${p.avgRebounds?.toFixed(1)} reb, ${p.avgAssists?.toFixed(1)} ast en ${p.gamesPlayed} PJ${p.season ? ` (temporada ${p.season - 1}-${String(p.season).slice(2)})` : ""}${p.status === "Day-To-Day" ? " · DUDOSO" : ""}`;
+  const subAvg = (p) => `${p.team} · ${p.position || "—"} · ${p.avgMinutes?.toFixed(1)} min por juego · ${p.gamesPlayed} PJ${p.season ? ` (temporada ${p.season - 1}-${String(p.season).slice(2)})` : ""}${p.status === "Day-To-Day" ? " · DUDOSO" : ""}`;
+  const avgNote = 'Promedio REAL por juego de la temporada, de los jugadores de equipos con juego hoy (sin los reportados "Fuera"; 20+ juegos). Es lo que suele hacer, no una probabilidad: no se ajusta por rival ni minutos de hoy, y un promedio no dice cuántas veces llega a cierto número (eso requiere el registro juego por juego, Fase 3b).';
   const sections = [
     {
       header: "Picks del día · equipos",
@@ -577,6 +588,18 @@ function DayPicks() {
       header: "Picks del día · jugadores",
       title: "Mayor probabilidad de triple-doble hoy",
       items: picks.topTD.map((p) => ({ key: p.id, name: p.name, sub: fmtDD(p), pct: p.tripleDoubleProb })),
+    },
+    {
+      header: "Picks del día · jugadores",
+      title: "Más rebotes por juego hoy",
+      items: picks.topReb.map((p) => ({ key: p.id, name: p.name, sub: subAvg(p), display: `${p.avgRebounds.toFixed(1)} reb` })),
+      note: avgNote,
+    },
+    {
+      header: "Picks del día · jugadores",
+      title: "Más asistencias por juego hoy",
+      items: picks.topAst.map((p) => ({ key: p.id, name: p.name, sub: subAvg(p), display: `${p.avgAssists.toFixed(1)} ast` })),
+      note: avgNote,
     },
   ];
   const playerNote = 'Probabilidad = frecuencia REAL de la temporada (dobles-dobles ÷ juegos jugados), de los jugadores de equipos con juego hoy, sin los reportados "Fuera" por ESPN (con 20+ juegos). No se ajusta por el rival ni por los minutos de hoy. "Dudoso" = ESPN lo lista Day-To-Day. Pendiente (Fase 3b): puntos/rebotes/asistencias por umbral, que necesitan el registro juego por juego.';
@@ -598,7 +621,7 @@ function DayPicks() {
                     <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{item.name}</div>
                     <div className="text-[11px]" style={{ color: "#8FA599" }}>{item.sub}</div>
                   </div>
-                  <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{(item.pct * 100).toFixed(1)}%</div>
+                  <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{item.display || `${(item.pct * 100).toFixed(1)}%`}</div>
                 </div>
               ))}
             </div>
