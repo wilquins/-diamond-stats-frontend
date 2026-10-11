@@ -205,44 +205,45 @@ function TopPlayersPanel({ teamCodes, title }) {
       .sort((a, b) => b[key] - a[key] || b.gamesPlayed - a.gamesPlayed || a.name.localeCompare(b.name))
       .slice(0, 3);
   const sections = [
-    { label: "Más probable a anotar gol", key: "goalProbability" },
-    { label: "Más probable a dar asistencia", key: "assistProbability" },
-    { label: "Más probable a sumar punto (gol o asistencia)", key: "pointProbability" },
+    { title: "Mayor probabilidad de gol hoy", key: "goalProbability", detail: (p) => `${p.goals} G en ${p.gamesPlayed} PJ` },
+    { title: "Mayor probabilidad de asistencia hoy", key: "assistProbability", detail: (p) => `${p.assists} A en ${p.gamesPlayed} PJ` },
+    { title: "Mayor probabilidad de punto hoy (gol o asistencia)", key: "pointProbability", detail: (p) => `${p.points} PTS en ${p.gamesPlayed} PJ` },
   ];
 
   return (
-    <div className="mt-6 mb-4">
-      <div className="text-[11px] tracking-widest uppercase mb-3" style={{ color: "#8FA599" }}>{title}</div>
-      <div className="space-y-3">
-        {sections.map((sec) => {
-          const items = top(sec.key);
-          return (
-            <div key={sec.key} className="p-3.5 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
-              <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>{sec.label}</div>
-              {items.length === 0 ? (
-                <p className="text-[11px]" style={{ color: "#5A7368" }}>Sin datos reales suficientes todavía.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {items.map((p, i) => (
-                    <div key={p.id} className="flex items-center gap-2">
-                      <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
-                        {i + 1}
-                      </div>
-                      <span className="text-sm flex-1" style={{ color: "#EDEAE1" }}>{p.name} <span style={{ color: "#8FA599", fontSize: "11px" }}>({p.position} · {p.team})</span></span>
-                      <span className="text-sm font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
-                        {(p[sec.key] * 100).toFixed(0)}% <span style={{ color: "#5A7368", fontSize: "10px", fontWeight: 400 }}>· {p.gamesPlayed} PJ</span>
-                      </span>
+    <div className="mt-6 mb-4 space-y-6">
+      {sections.map((sec) => {
+        const items = top(sec.key);
+        return (
+          <div key={sec.key} className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+            <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>{title}</div>
+            <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>{sec.title}</h2>
+            {items.length === 0 ? (
+              <p className="text-[11px]" style={{ color: "#8FA599" }}>Sin datos reales suficientes todavía.</p>
+            ) : (
+              <div className="space-y-3">
+                {items.map((p, i) => (
+                  <div key={p.id} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                      {i + 1}
                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <p className="text-[10px] mt-2 leading-relaxed" style={{ color: "#5A7368" }}>
-        Probabilidad real de al menos 1 por juego, calculada con la tasa real de cada jugador esta temporada. "PJ" = partidos jugados: con pocos, el número es ruidoso y mejora conforme avance la temporada.
-      </p>
+                    <div className="flex-1">
+                      <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{p.name}</div>
+                      <div className="text-[11px]" style={{ color: "#8FA599" }}>{p.team} · {p.position} · {sec.detail(p)}</div>
+                    </div>
+                    <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                      {(p[sec.key] * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>
+              Probabilidad real de al menos 1 por juego, con la tasa real de cada jugador esta temporada (Poisson). "PJ" = partidos jugados: con pocos, el número es ruidoso y mejora conforme avance la temporada.
+            </p>
+          </div>
+        );
+      })}
     </div>
   );
 }
