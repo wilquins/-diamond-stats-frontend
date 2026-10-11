@@ -617,11 +617,13 @@ function DayPicks() {
       const topTeams = teamPicks.slice(0, 3);
 
       // Guarda automáticamente equipo y gol para Precisión.
-      if (topTeams.length > 0 || topGoal.length > 0) {
+      if (topTeams.length > 0 || topGoal.length > 0 || topAssist.length > 0 || topPoint.length > 0) {
         const pickDate = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
         const nhlPicks = [
           ...topTeams.map((t) => ({ pick_date: pickDate, pick_type: "team", player_id: null, player_name: t.team, team_code: t.teamCode, predicted_prob: t.prob })),
           ...topGoal.map((p) => ({ pick_date: pickDate, pick_type: "goal", player_id: p.id || null, player_name: p.name, team_code: p.team || "", predicted_prob: p.goalProbability })),
+          ...topAssist.map((p) => ({ pick_date: pickDate, pick_type: "assist", player_id: p.id || null, player_name: p.name, team_code: p.team || "", predicted_prob: p.assistProbability })),
+          ...topPoint.map((p) => ({ pick_date: pickDate, pick_type: "point", player_id: p.id || null, player_name: p.name, team_code: p.team || "", predicted_prob: p.pointProbability })),
         ];
         fetch(`${BACKEND_URL}/api/nhl/picks/save`, {
           method: "POST",
@@ -984,34 +986,43 @@ function NhlPicksAccuracy() {
         </p>
       )}
 
-      {status === "listo" && data && data.teams && data.goal && data.teams.total === 0 && data.goal.total === 0 && (
-        <p className="text-[13px]" style={{ color: "#8FA599" }}>
-          Todavía no hay picks comparados contra resultados reales. La app guarda los picks del día automáticamente — vuelve en unos días y presiona "Revisar picks de días anteriores". El gol de jugador se revisa contra el boxscore real de la NHL — si esa parte falla por algún cambio de formato, el pick queda pendiente para la siguiente revisión en vez de romperse.
-        </p>
-      )}
-
-      {status === "listo" && data && data.teams && data.goal && (data.teams.total > 0 || data.goal.total > 0) && (
-        <>
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
-                {data.teams.accuracy != null ? `${(data.teams.accuracy * 100).toFixed(1)}%` : "—"}
+      {status === "listo" && data && data.teams && data.goal && (() => {
+        const tiles = [
+          ["Equipos", data.teams],
+          ["Gol", data.goal],
+          ["Asistencia", data.assist || { accuracy: null, total: 0 }],
+          ["Punto", data.point || { accuracy: null, total: 0 }],
+        ];
+        const anyData = tiles.some(([, t]) => t.total > 0);
+        if (!anyData) {
+          return (
+            <p className="text-[13px]" style={{ color: "#8FA599" }}>
+              Todavía no hay picks comparados contra resultados reales. La app guarda los picks del día automáticamente — vuelve en unos días y presiona "Revisar picks de días anteriores". Gol, asistencia y punto se revisan contra el boxscore real de la NHL.
+            </p>
+          );
+        }
+        return (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+            {tiles.map(([label, t]) => (
+              <div key={label} className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+                <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                  {t.accuracy != null ? `${(t.accuracy * 100).toFixed(1)}%` : "—"}
+                </div>
+                <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>{label} ({t.total})</div>
               </div>
-              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Equipos ({data.teams.total})</div>
-            </div>
-            <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
-              <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
-                {data.goal.accuracy != null ? `${(data.goal.accuracy * 100).toFixed(1)}%` : "—"}
-              </div>
-              <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Gol ({data.goal.total})</div>
-            </div>
+            ))}
           </div>
+        );
+      })()}
+
+      {status === "listo" && data && data.teams && data.goal && data.recent && data.recent.length > 0 && (
+        <>
           <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Últimos picks comparados</div>
           <div className="space-y-1.5">
             {data.recent.map((r, i) => (
               <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
                 <span style={{ color: "#C9D6CD" }}>{r.date} · {r.name} <span style={{ color: "#8FA599" }}>({r.team})</span></span>
-                <span style={{ color: "#8FA599" }}>{r.type === "team" ? "Equipo" : "Gol"} · {(r.prob * 100).toFixed(0)}%</span>
+                <span style={{ color: "#8FA599" }}>{r.type === "team" ? "Equipo" : r.type === "assist" ? "Asistencia" : r.type === "point" ? "Punto" : "Gol"} · {(r.prob * 100).toFixed(0)}%</span>
                 <span style={{ color: r.success ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>{r.success ? "✓ acertó" : "✗ falló"}</span>
               </div>
             ))}
