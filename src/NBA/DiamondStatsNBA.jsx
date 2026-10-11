@@ -3,7 +3,7 @@ import React, { useState, useEffect } from "react";
 const BACKEND_URL = "https://diamond-stats-backend.onrender.com";
 
 // ---------------------------------------------------------------------------
-// Modelo NBA — Fase 1. Cada número sale de una fuente real o de una
+// Modelo NBA — Fase 2 (lesiones reales + Over/Under). Cada número sale de una fuente real o de una
 // constante citada; lo que es un peso subjetivo se dice explícitamente.
 // ---------------------------------------------------------------------------
 
@@ -44,6 +44,33 @@ const NBA_B2B_POINTS = 1.2;
 
 const pct = (w, l) => (w + l > 0 ? w / (w + l) : null);
 
+// CDF normal estándar (aproximación Abramowitz-Stegun 7.1.26).
+function normCdf(z) {
+  const t = 1 / (1 + 0.2316419 * Math.abs(z));
+  const d = 0.3989423 * Math.exp((-z * z) / 2);
+  const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return z > 0 ? 1 - p : p;
+}
+
+// Over/Under: total esperado = promedio de (puntos a favor del equipo +
+// puntos en contra del rival) para cada lado. La LÍNEA es la del propio
+// modelo (total esperado redondeado a .5), NO la de una casa de apuestas.
+// La desviación del total sale de los juegos reales completados de cada
+// equipo (totalSD del backend). No se ajusta por lesiones: no hay un
+// coeficiente citado de cuánto bajan el total, así que no se inventa.
+function computeNbaOverUnder(home, away, homeSchedule, awaySchedule) {
+  if (!home?.avgPointsFor || !home?.avgPointsAgainst || !away?.avgPointsFor || !away?.avgPointsAgainst) return null;
+  const sdH = homeSchedule?.totalSD;
+  const sdA = awaySchedule?.totalSD;
+  if (sdH == null || sdA == null) return null;
+  const expectedTotal = (home.avgPointsFor + away.avgPointsAgainst) / 2 + (away.avgPointsFor + home.avgPointsAgainst) / 2;
+  const sd = Math.sqrt((sdH * sdH + sdA * sdA) / 2);
+  if (!sd) return null;
+  const line = Math.round(expectedTotal - 0.5) + 0.5;
+  const overProb = 1 - normCdf((line - expectedTotal) / sd);
+  return { expectedTotal, line, sd, overProb };
+}
+
 async function computeNbaWinProb(home, away, ctx) {
   if (!home || !away) return null;
   const leagueHome = ctx.leagueHomeWinPct; // MEDIDA de los 30 equipos reales
@@ -79,9 +106,10 @@ async function computeNbaWinProb(home, away, ctx) {
 
   // Fuerza de calendario real (rivales enfrentados). Peso 0.3 = decisión
   // subjetiva, igual que en NHL.
-  const [homeSchedule, awaySchedule] = await Promise.all([
+  const [homeSchedule, awaySchedule, injuries] = await Promise.all([
     fetch(`${BACKEND_URL}/api/nba/team/${home.id}/schedule-analysis`).then((r) => r.json()).catch(() => null),
     fetch(`${BACKEND_URL}/api/nba/team/${away.id}/schedule-analysis`).then((r) => r.json()).catch(() => null),
+    fetch(`${BACKEND_URL}/api/nba/game-injuries?homeId=${home.id}&awayId=${away.id}`).then((r) => r.json()).catch(() => null),
   ]);
   let sosAdj = 0;
   if (homeSchedule?.avgOpponentWinPct != null && awaySchedule?.avgOpponentWinPct != null) {
@@ -94,8 +122,17 @@ async function computeNbaWinProb(home, away, ctx) {
   const awayB2B = !!ctx.awayB2B;
   const restAdj = (awayB2B ? b2bPenalty : 0) - (homeB2B ? b2bPenalty : 0);
 
-  const prob = Math.min(0.92, Math.max(0.08, baseProb + homeAdvantage + formAdj + homeRoadAdj + sosAdj + restAdj));
-  return { prob, baseProb, homePyth, awayPyth, homeAdvantage, formAdj, homeRoadAdj, sosAdj, restAdj, homeB2B, awayB2B, homeSchedule, awaySchedule };
+  // Lesiones reales (ESPN): puntos por 100 posesiones que pierde cada equipo
+  // según su valor estimado (BPM ≈ 0.53×(PER−15)), minutos y estado. Es una
+  // ESTIMACIÓN con pesos propios (ver nota del panel). Tope ±30% por
+  // seguridad ante datos raros.
+  const homeLost = injuries?.home?.lostPoints ?? 0;
+  const awayLost = injuries?.away?.lostPoints ?? 0;
+  const injuryAdj = Math.max(-0.3, Math.min(0.3, (awayLost - homeLost) * NBA_PROB_PER_POINT));
+
+  const prob = Math.min(0.92, Math.max(0.08, baseProb + homeAdvantage + formAdj + homeRoadAdj + sosAdj + restAdj + injuryAdj));
+  const overUnder = computeNbaOverUnder(home, away, homeSchedule, awaySchedule);
+  return { prob, baseProb, homePyth, awayPyth, homeAdvantage, formAdj, homeRoadAdj, sosAdj, restAdj, injuryAdj, homeB2B, awayB2B, homeSchedule, awaySchedule, injuries, overUnder };
 }
 
 const etDate = (iso) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
@@ -129,6 +166,16 @@ async function predictAndSaveGame(game, base, restByDate) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ game_date: date, home_code: game.homeCode, away_code: game.awayCode, home_win_prob: r.prob }),
+  }).catch(() => {});
+  await saveOverUnder(date, game, r.overUnder);
+}
+
+function saveOverUnder(date, game, ou) {
+  if (!ou) return Promise.resolve();
+  return fetch(`${BACKEND_URL}/api/nba/overunder/save`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ game_date: date, home_code: game.homeCode, away_code: game.awayCode, line: ou.line, over_prob: ou.overProb, expected_total: ou.expectedTotal }),
   }).catch(() => {});
 }
 
@@ -252,6 +299,7 @@ function GameDetail({ game, onBack }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ game_date: date, home_code: game.homeCode, away_code: game.awayCode, home_win_prob: r.prob }),
         }).catch(() => {});
+        saveOverUnder(date, game, r.overUnder);
       }
     })();
     return () => { cancelled = true; };
@@ -294,7 +342,7 @@ function GameDetail({ game, onBack }) {
           return (
             <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
               <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
-                Probabilidad de ganar (Log5 sobre Expectativa Pitagórica + ventaja de casa medida + forma reciente + récord casa/ruta + fuerza de calendario + descanso)
+                Probabilidad de ganar (Log5 sobre Expectativa Pitagórica + ventaja de casa medida + forma reciente + récord casa/ruta + fuerza de calendario + descanso + lesiones)
               </div>
               <div className="space-y-2.5 mb-2">
                 {[{ name: game.awayName, p: awayP, fav: awayP >= homeP }, { name: game.homeName, p: homeP, fav: homeP > awayP }].map((row) => (
@@ -312,7 +360,7 @@ function GameDetail({ game, onBack }) {
               <div className="text-[10px] leading-relaxed space-y-0.5" style={{ color: "#5A7368" }}>
                 <div>Fuerza base (Pitagórica, local {fmt(result.homePyth)} · visitante {fmt(result.awayPyth)}) → {fmt(result.baseProb)} para el local.</div>
                 <div>
-                  Ventaja de casa medida de la liga: {result.homeAdvantage ? sgn(result.homeAdvantage) : "—"} · Forma reciente: {sgn(result.formAdj)} · Casa/ruta propio: {sgn(result.homeRoadAdj)} · Calendario: {sgn(result.sosAdj)} · Descanso: {sgn(result.restAdj)}
+                  Ventaja de casa medida de la liga: {result.homeAdvantage ? sgn(result.homeAdvantage) : "—"} · Forma reciente: {sgn(result.formAdj)} · Casa/ruta propio: {sgn(result.homeRoadAdj)} · Calendario: {sgn(result.sosAdj)} · Descanso: {sgn(result.restAdj)} · Lesiones: {sgn(result.injuryAdj || 0)}
                 </div>
                 {(result.homeB2B || result.awayB2B) && (
                   <div style={{ color: "#FFB627" }}>
@@ -325,6 +373,72 @@ function GameDetail({ game, onBack }) {
                   </div>
                 )}
               </div>
+            </div>
+          );
+        })()}
+
+        {status === "listo" && result?.overUnder && (() => {
+          const ou = result.overUnder;
+          const overP = ou.overProb;
+          return (
+            <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
+                Over/Under de puntos totales (línea del modelo: {ou.line})
+              </div>
+              <div className="space-y-2.5 mb-2">
+                {[{ name: `Over ${ou.line}`, p: overP, fav: overP >= 0.5 }, { name: `Under ${ou.line}`, p: 1 - overP, fav: overP < 0.5 }].map((row) => (
+                  <div key={row.name}>
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span style={{ color: row.fav ? "#FFB627" : "#C9D6CD" }}>{row.name}</span>
+                      <span className="font-bold tabular-nums" style={{ color: row.fav ? "#FFB627" : "#C9D6CD", fontFamily: "ui-monospace, monospace" }}>{(row.p * 100).toFixed(1)}%</span>
+                    </div>
+                    <div className="h-1.5 w-full rounded-full" style={{ background: "#1A362A" }}>
+                      <div className="h-1.5 rounded-full transition-all duration-500" style={{ width: `${(row.p * 100).toFixed(1)}%`, background: row.fav ? "#FFB627" : "#5A7368" }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="text-[10px] leading-relaxed" style={{ color: "#5A7368" }}>
+                Total esperado {ou.expectedTotal.toFixed(1)} (puntos a favor de cada equipo con los puntos que permite el rival) · desviación real de los totales {ou.sd.toFixed(1)}. La línea es la del modelo, no la de una casa de apuestas; no se ajusta por lesiones.
+              </div>
+            </div>
+          );
+        })()}
+
+        {status === "listo" && result?.injuries && (() => {
+          const inj = result.injuries;
+          const sides = [
+            { label: game.awayName, d: inj.away },
+            { label: game.homeName, d: inj.home },
+          ];
+          const none = sides.every((x) => !x.d || (x.d.players || []).length === 0);
+          return (
+            <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+              <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>Lesiones reales (ESPN)</div>
+              {none ? (
+                <p className="text-[11px]" style={{ color: "#8FA599" }}>ESPN no reporta lesionados para estos dos equipos ahora mismo.</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {sides.map(({ label, d }) => (
+                    <div key={label}>
+                      <div className="text-[11px] font-semibold mb-1" style={{ color: "#EDEAE1" }}>
+                        {label}{d && d.lostPoints > 0 ? ` · −${d.lostPoints.toFixed(1)} pts/100 pos. estimados` : ""}
+                      </div>
+                      {(d?.players || []).length === 0 && <div className="text-[11px]" style={{ color: "#8FA599" }}>Sin lesionados reportados.</div>}
+                      {(d?.players || []).map((pl, i) => (
+                        <div key={i} className="text-[11px] mb-1" style={{ color: "#8FA599" }}>
+                          <span style={{ color: pl.status === "Out" ? "#C8393E" : "#FFB627", fontWeight: 700 }}>{pl.status === "Out" ? "Fuera" : "Dudoso"}</span>{" "}
+                          <span style={{ color: "#C9D6CD" }}>{pl.name}</span>{pl.position ? ` (${pl.position})` : ""}
+                          {pl.injury ? ` · ${pl.injury}` : ""}{pl.returnDate ? ` · regreso est. ${pl.returnDate}` : ""}
+                          {pl.hasStats
+                            ? ` · ${pl.avgMinutes?.toFixed(1)} min · ${pl.avgPoints?.toFixed(1)} pts · PER ${pl.per?.toFixed(1)} · valor perdido ≈ ${pl.lostPoints.toFixed(1)}`
+                            : " · sin estadísticas suficientes (<20 juegos), no cuenta en el ajuste"}
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           );
         })()}
@@ -349,7 +463,7 @@ function GameDetail({ game, onBack }) {
         )}
 
         <p className="text-[10px] leading-relaxed" style={{ color: "#5A7368" }}>
-          Fase 1: sin lesiones ni alineación real todavía — en NBA eso pesa muchísimo (una estrella fuera cambia el juego), y es lo siguiente a agregar. Pesos subjetivos (no citados, se evaluarán con el backtesting): forma reciente 0.10, casa/ruta propio 0.5, calendario 0.3. El efecto de back-to-back (~1.2 puntos) es una estimación de fuente secundaria.
+          Lesiones: el valor de cada jugador es una ESTIMACIÓN — BPM ≈ 0.53×(PER−15) (escala de Basketball-Reference, reemplazo = −2), proporcional a sus minutos (min/48) y con peso 1.0 si está Fuera y 0.5 si es Dudoso (este último es subjetivo). Solo cuentan jugadores con 20+ juegos. Cada punto por 100 posesiones perdido ≈ 3.3% de probabilidad. No hay alineación confirmada todavía. Pesos subjetivos (se evaluarán con el backtesting): forma reciente 0.10, casa/ruta propio 0.5, calendario 0.3. El efecto de back-to-back (~1.2 puntos) es una estimación de fuente secundaria.
         </p>
       </div>
     </div>
@@ -427,6 +541,16 @@ function NbaBacktestStatus() {
           <span style={{ color: "#C8393E", fontWeight: 700 }}>tabla no existe en Supabase</span>
         )}
       </div>
+      {s.overunder && (
+        <div className="flex items-center justify-between text-[11px] mt-1.5">
+          <span style={{ color: "#C9D6CD" }}>Over/Under</span>
+          {s.overunder.exists ? (
+            <span style={{ color: "#8FA599" }}>{s.overunder.total} guardadas · {s.overunder.pending} esperando resultado</span>
+          ) : (
+            <span style={{ color: "#C8393E", fontWeight: 700 }}>tabla no existe en Supabase</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -508,6 +632,74 @@ function WinProbAccuracy() {
   );
 }
 
+function OverUnderAccuracy() {
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  const [checking, setChecking] = useState(false);
+
+  const load = () => {
+    setStatus("cargando");
+    fetch(`${BACKEND_URL}/api/nba/overunder/accuracy`)
+      .then((r) => r.json())
+      .then((d) => { setData(d); setStatus("listo"); })
+      .catch(() => setStatus("error"));
+  };
+  useEffect(() => { load(); }, []);
+
+  const checkNow = () => {
+    setChecking(true);
+    fetch(`${BACKEND_URL}/api/nba/overunder/check`, { method: "POST" })
+      .then((r) => r.json())
+      .then(() => { load(); setChecking(false); })
+      .catch(() => setChecking(false));
+  };
+
+  return (
+    <div className="rounded-xl border p-6 mb-4" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>Backtesting real — Over/Under</div>
+      <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>¿Acierta los totales?</h2>
+      <button
+        onClick={checkNow}
+        disabled={checking}
+        className="mb-4 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checking ? 0.6 : 1 }}
+      >
+        {checking ? "Revisando resultados reales…" : "Revisar Over/Under de días anteriores"}
+      </button>
+
+      {status === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
+      {status === "error" && <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>}
+
+      {status === "listo" && data && !data.totalChecked && (
+        <p className="text-[13px]" style={{ color: "#8FA599" }}>Todavía no hay Over/Under comparados contra totales reales (solo se guardan juegos de temporada regular que no han empezado).</p>
+      )}
+
+      {status === "listo" && data && data.totalChecked > 0 && (
+        <>
+          <div className="p-3.5 rounded-lg border text-center mb-4" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
+            <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{(data.accuracy * 100).toFixed(1)}%</div>
+            <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Acertó Over/Under ({data.totalChecked} juegos, sin contar empates con la línea)</div>
+          </div>
+          <div className="space-y-1.5">
+            {(data.recent || []).map((r, i) => {
+              const pick = r.overProb >= 0.5 ? "over" : "under";
+              const push = r.actualResult === "push";
+              const correct = pick === r.actualResult;
+              return (
+                <div key={i} className="flex items-center justify-between text-[11px] p-2 rounded" style={{ background: "#12281E" }}>
+                  <span style={{ color: "#C9D6CD" }}>{r.date} · {r.away} @ {r.home}</span>
+                  <span style={{ color: "#8FA599" }}>{pick === "over" ? "Over" : "Under"} {r.line} ({(Math.max(r.overProb, 1 - r.overProb) * 100).toFixed(0)}%)</span>
+                  <span style={{ color: push ? "#8FA599" : correct ? "#3FC97A" : "#C8393E", fontWeight: 700 }}>{push ? "= push" : correct ? "✓" : "✗"} ({r.actualTotalPoints})</span>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function DiamondStatsNBA({ onBackToMenu }) {
   const [view, setView] = useState("juegos"); // "juegos" | "posiciones" | "precision"
   const [selectedGame, setSelectedGame] = useState(null);
@@ -525,7 +717,7 @@ export default function DiamondStatsNBA({ onBackToMenu }) {
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full" style={{ background: "#C8393E" }} />
             <span className="text-[11px] tracking-[0.25em] uppercase" style={{ color: "#8FA599", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>
-              NBA Analytics — Fase 1
+              NBA Analytics — Fase 2
             </span>
             {onBackToMenu && (
               <button
@@ -572,12 +764,13 @@ export default function DiamondStatsNBA({ onBackToMenu }) {
           <>
             <NbaBacktestStatus />
             <WinProbAccuracy />
+            <OverUnderAccuracy />
           </>
         )}
 
         {!selectedGame && (
           <p className="text-[10px] mt-8 leading-relaxed" style={{ color: "#5A7368" }}>
-            Fase 1: probabilidad real con Log5 sobre la Expectativa Pitagórica (exponente 13.91) + ventaja de casa medida de los récords reales de la liga + forma reciente + récord casa/ruta + fuerza de calendario + back-to-back con el calendario real, con backtesting real guardado. Pendiente: lesiones/alineación real, Over/Under y Picks del día de jugadores. Ahora mismo solo hay pretemporada (no se guarda para precisión), así que los récords usados son los de la última temporada completa.
+            Fase 2: probabilidad real con Log5 sobre la Expectativa Pitagórica (exponente 13.91) + ventaja de casa medida + forma reciente + casa/ruta + calendario + back-to-back + lesiones reales de ESPN, más Over/Under, con backtesting real guardado. Pendiente: alineación confirmada y Picks del día de jugadores. Ahora mismo solo hay pretemporada (no se guarda para precisión), así que los récords usados son los de la última temporada completa.
           </p>
         )}
       </div>
