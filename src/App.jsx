@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import DiamondStats from "./MLB/DiamondStats.jsx";
 import DiamondStatsNFL from "./NFL/DiamondStatsNFL.jsx";
 import DiamondStatsNHL from "./NHL/DiamondStatsNHL.jsx";
+import DiamondStatsNBA from "./NBA/DiamondStatsNBA.jsx";
 
 // ---- Íconos propios por deporte — mismo estilo de línea que ya usa MLB
 // (dorado, minimalista), en vez de emojis genéricos. ----
@@ -50,7 +51,7 @@ function HockeyIcon({ active }) {
 const SPORTS = [
   { id: "mlb", name: "MLB", Icon: BaseballIcon, ready: true, tagline: "Béisbol", stats: ["30 equipos en vivo", "Predicciones reales", "Backtesting real"] },
   { id: "nfl", name: "NFL", Icon: FootballIcon, ready: true, tagline: "Fútbol americano", stats: ["Predicciones reales", "Fuerza de calendario", "Backtesting real"] },
-  { id: "nba", name: "NBA", Icon: BasketballIcon, ready: false, tagline: "Básquetbol" },
+  { id: "nba", name: "NBA", Icon: BasketballIcon, ready: true, tagline: "Básquetbol", stats: ["Calendario real", "Probabilidad de ganar", "Backtesting real"] },
   { id: "nhl", name: "NHL", Icon: HockeyIcon, ready: true, tagline: "Hockey", stats: ["Calendario real", "Portero titular real", "Fase 2"] },
 ];
 
@@ -138,17 +139,8 @@ export default function App() {
   if (sport === "mlb") return <DiamondStats onBackToMenu={() => setSport(null)} />;
   if (sport === "nfl") return <DiamondStatsNFL onBackToMenu={() => setSport(null)} />;
   if (sport === "nhl") return <DiamondStatsNHL onBackToMenu={() => setSport(null)} />;
+  if (sport === "nba") return <DiamondStatsNBA onBackToMenu={() => setSport(null)} />;
 
-  // nba no es seleccionable todavía (botón deshabilitado en
-  // SportLanding), así que si algún día se activa sin tener su
-  // componente listo, esto evita una pantalla en blanco.
-  if (sport === "nba") {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "#0B1F17", color: "#8FA599" }}>
-        Próximamente — vuelve pronto.
-      </div>
-    );
-  }
 
   return <SportLanding onSelect={setSport} />;
 }
