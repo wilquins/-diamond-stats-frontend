@@ -605,7 +605,15 @@ function DayPicks() {
         })
       );
       const allPlayers = perTeamResults.flat();
-      const topGoal = [...allPlayers].sort((a, b) => b.goalProbability - a.goalProbability).slice(0, 3);
+      // Desempate fijo (más partidos jugados, luego nombre) para que el
+      // orden no cambie entre pantallas con empates exactos.
+      const topBy = (key) =>
+        [...allPlayers]
+          .sort((a, b) => b[key] - a[key] || b.gamesPlayed - a.gamesPlayed || a.name.localeCompare(b.name))
+          .slice(0, 3);
+      const topGoal = topBy("goalProbability");
+      const topAssist = topBy("assistProbability");
+      const topPoint = topBy("pointProbability");
       const topTeams = teamPicks.slice(0, 3);
 
       // Guarda automáticamente equipo y gol para Precisión.
@@ -623,7 +631,7 @@ function DayPicks() {
       }
 
       if (!cancelled) {
-        setPicks({ topTeams, topGoal });
+        setPicks({ topTeams, topGoal, topAssist, topPoint });
         setStatus("listo");
       }
     })().catch(() => { if (!cancelled) setStatus("error"); });
@@ -634,36 +642,62 @@ function DayPicks() {
   if (status === "error") return <p className="text-[11px]" style={{ color: "#8FA599" }}>No se pudo conectar con el backend.</p>;
   if (!picks) return null;
 
+  // Mismo formato que los Picks del día de MLB: una tarjeta por categoría,
+  // número en círculo, nombre, detalle debajo y porcentaje grande al final.
   const sections = [
-    { label: "Mayor probabilidad de ganar hoy", items: picks.topTeams.map((t) => ({ name: `${t.teamCode} le gana a ${t.opponent}`, stat: `${(t.prob * 100).toFixed(1)}%` })) },
-    { label: "Mayor probabilidad de anotar gol hoy", items: picks.topGoal.map((p) => ({ name: `${p.name} (${p.position} · ${p.team})`, stat: `${(p.goalProbability * 100).toFixed(0)}% · ${p.gamesPlayed} PJ` })) },
+    {
+      header: "Picks del día · equipos",
+      title: "Mayor probabilidad de ganar hoy",
+      items: picks.topTeams.map((t) => ({ key: t.teamCode, name: t.team, sub: `le gana a ${t.opponent}`, pct: t.prob })),
+      note: "Mismo modelo de probabilidad que el detalle de cada juego (Log5 sobre % de puntos + ventaja de casa + forma + casa/ruta + fuerza de calendario). El portero titular real de cada juego se ve al entrar a su detalle.",
+    },
+    {
+      header: "Picks del día · jugadores",
+      title: "Mayor probabilidad de gol hoy",
+      items: picks.topGoal.map((p) => ({ key: p.id, name: p.name, sub: `${p.team} · ${p.position} · ${p.goals} G en ${p.gamesPlayed} PJ`, pct: p.goalProbability })),
+    },
+    {
+      header: "Picks del día · jugadores",
+      title: "Mayor probabilidad de asistencia hoy",
+      items: picks.topAssist.map((p) => ({ key: p.id, name: p.name, sub: `${p.team} · ${p.position} · ${p.assists} A en ${p.gamesPlayed} PJ`, pct: p.assistProbability })),
+    },
+    {
+      header: "Picks del día · jugadores",
+      title: "Mayor probabilidad de punto hoy (gol o asistencia)",
+      items: picks.topPoint.map((p) => ({ key: p.id, name: p.name, sub: `${p.team} · ${p.position} · ${p.points} PTS en ${p.gamesPlayed} PJ`, pct: p.pointProbability })),
+    },
   ];
+  const playerNote = 'Probabilidad real de al menos 1 por juego, con la tasa real de cada jugador esta temporada (Poisson), entre los jugadores de TODOS los equipos con partido pendiente hoy. "PJ" = partidos jugados: con pocos, el número es ruidoso y mejora conforme avance la temporada.';
 
   return (
-    <div className="space-y-4">
-      {sections.map((s) => (
-        <div key={s.label} className="p-3.5 rounded-xl border" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
-          <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>{s.label}</div>
-          {s.items.length === 0 ? (
-            <p className="text-[11px]" style={{ color: "#5A7368" }}>Sin datos suficientes hoy — puede ser que no haya juegos de temporada regular programados.</p>
+    <div className="space-y-6">
+      {sections.map((sec) => (
+        <div key={sec.title} className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+          <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>{sec.header}</div>
+          <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>{sec.title}</h2>
+          {sec.items.length === 0 ? (
+            <p className="text-[11px]" style={{ color: "#8FA599" }}>Sin datos suficientes hoy — puede ser que no haya juegos de temporada regular pendientes.</p>
           ) : (
-            <div className="space-y-1.5">
-              {s.items.map((item, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+            <div className="space-y-3">
+              {sec.items.map((item, i) => (
+                <div key={item.key + "-" + i} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
                     {i + 1}
                   </div>
-                  <span className="text-sm flex-1" style={{ color: "#EDEAE1" }}>{item.name}</span>
-                  <span className="text-sm font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{item.stat}</span>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{item.name}</div>
+                    <div className="text-[11px]" style={{ color: "#8FA599" }}>{item.sub}</div>
+                  </div>
+                  <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
+                    {(item.pct * 100).toFixed(1)}%
+                  </div>
                 </div>
               ))}
             </div>
           )}
+          <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>{sec.note || playerNote}</p>
         </div>
       ))}
-      <p className="text-[10px] mt-2 leading-relaxed" style={{ color: "#5A7368" }}>
-        Lo mejor de lo mejor, entre TODOS los partidos pendientes de HOY — no solo uno. Con la temporada recién empezada, el goleador se calcula con muy pocos juegos reales todavía (se muestra "PJ" = partidos jugados, para que veas la muestra con la que se calculó — entre más avance la temporada, más confiable será ese número). El portero titular real de cada partido se ve al entrar a su detalle.
-      </p>
     </div>
   );
 }
