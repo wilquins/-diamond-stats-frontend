@@ -66,6 +66,12 @@ async function computeNflWinProb(home, away, weather, eventId) {
   // con un tope para que un solo partido con marcador exagerado no
   // distorsione todo el cálculo — y regresionado igual que la
   // Pitagórica cuando hay pocos partidos jugados de por medio.
+  // CORREGIDO (oct 2026): este ajuste ya NO se suma a la probabilidad. La
+  // Expectativa Pitagórica de arriba ya está hecha con los mismos puntos a
+  // favor/en contra, así que sumar además el diferencial contaba la misma
+  // información dos veces y inflaba las probabilidades (el backtesting real
+  // dio Brier 0.350 con 34 juegos, peor que adivinar 50/50 = 0.25). Se
+  // sigue calculando solo para mostrarlo en pantalla.
   const diffAdjRaw = Math.max(-0.15, Math.min(0.15, (homeDiffPerGame - awayDiffPerGame) * 0.02));
   const diffAdj = diffAdjRaw * Math.min(shrinkWeight(gamesHome), shrinkWeight(gamesAway));
 
@@ -138,7 +144,12 @@ async function computeNflWinProb(home, away, weather, eventId) {
     sosAdj = sosAdjRaw * Math.min(shrinkWeight(gamesHome), shrinkWeight(gamesAway));
   }
 
-  let prob = baseProb + NFL_HOME_ADVANTAGE + diffAdj + turnoverAdj + h2hAdj + homeRoadAdj + weatherAdj + sosAdj;
+  // Los ajustes secundarios (balones perdidos, cara a cara, casa/ruta,
+  // clima, calendario) miden en parte lo mismo que la fuerza base, así que
+  // su suma se limita a ±0.10. El tope es una decisión SUBJETIVA (no hay
+  // coeficiente citado); el backtesting dirá si hay que moverlo.
+  const secondary = Math.max(-0.1, Math.min(0.1, turnoverAdj + h2hAdj + homeRoadAdj + weatherAdj + sosAdj));
+  let prob = baseProb + NFL_HOME_ADVANTAGE + secondary;
 
   // FPI real de ESPN (su propio modelo, calibrado con años de fuerza de
   // roster) — se usa como referencia externa, con más peso cuanto menos
