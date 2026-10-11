@@ -443,6 +443,8 @@ function GameDetail({ game, onBack }) {
           );
         })()}
 
+        {status === "listo" && <GamePlayerPicks game={game} />}
+
         {info?.home && info?.away && (
           <div className="mb-4 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
             <div className="text-[10px] tracking-widest uppercase mb-2" style={{ color: "#8FA599" }}>
@@ -466,6 +468,144 @@ function GameDetail({ game, onBack }) {
           Lesiones: el valor de cada jugador es una ESTIMACIÓN — BPM ≈ 0.53×(PER−15) (escala de Basketball-Reference, reemplazo = −2), proporcional a sus minutos (min/48) y con peso 1.0 si está Fuera y 0.5 si es Dudoso (este último es subjetivo). Solo cuentan jugadores con 20+ juegos. Cada punto por 100 posesiones perdido ≈ 3.3% de probabilidad. No hay alineación confirmada todavía. Pesos subjetivos (se evaluarán con el backtesting): forma reciente 0.10, casa/ruta propio 0.5, calendario 0.3. El efecto de back-to-back (~1.2 puntos) es una estimación de fuente secundaria.
         </p>
       </div>
+    </div>
+  );
+}
+
+// Jugadores de una lista de equipos -> los 3 mejores por categoría. Se usa en
+// "Picks del día" (todos los equipos de hoy) y dentro de cada juego (sus 2
+// equipos). Probabilidad de doble/triple-doble = frecuencia REAL de la
+// temporada; puntos/rebotes/asistencias = frecuencia REAL de llegar al
+// umbral (promedio redondeado) en los juegos que jugó.
+async function computePlayerPicks(teams) {
+  const perTeam = await Promise.all(
+    teams.map(async (t) => {
+      const d = await fetch(`${BACKEND_URL}/api/nba/team/${t.id}/players`).then((r) => r.json()).catch(() => ({ players: [] }));
+      return (d.players || []).map((p) => ({ ...p, team: t.code }));
+    })
+  );
+  const eligible = perTeam.flat().filter((p) => p.hasStats && p.status !== "Out");
+  const topBy = (key) =>
+    eligible
+      .filter((p) => p[key] != null && p[key] > 0)
+      .sort((a, b) => b[key] - a[key] || b.gamesPlayed - a.gamesPlayed || (a.name || "").localeCompare(b.name || ""))
+      .slice(0, 3);
+  const topAvg = (key) =>
+    [...eligible]
+      .filter((p) => p[key] != null)
+      .sort((a, b) => b[key] - a[key] || b.gamesPlayed - a.gamesPlayed || (a.name || "").localeCompare(b.name || ""))
+      .slice(0, 3);
+  const topDD = topBy("doubleDoubleProb");
+  const topTD = topBy("tripleDoubleProb");
+  const topPts = topAvg("avgPoints");
+  const topReb = topAvg("avgRebounds");
+  const topAst = topAvg("avgAssists");
+
+  const candidates = [...new Map([...topPts, ...topReb, ...topAst].map((p) => [p.id, p])).values()];
+  const gv = {};
+  await Promise.all(
+    candidates.map(async (p) => {
+      const d = await fetch(`${BACKEND_URL}/api/nba/player/${p.id}/game-values?season=${p.season}`).then((r) => r.json()).catch(() => null);
+      if (d?.values && d.games >= 20) gv[p.id] = d.values;
+    })
+  );
+  const freq = (arr, t) => arr.filter((v) => v >= t).length / arr.length;
+  const withLadder = (list, avgKey, vKey) =>
+    list.map((p) => {
+      const arr = gv[p.id]?.[vKey];
+      if (!arr) return { ...p, ladder: null };
+      const t = Math.max(1, Math.round(p[avgKey]));
+      return {
+        ...p,
+        ladder: { t, games: arr.length, main: freq(arr, t), lo: { t: Math.max(1, t - 2), p: freq(arr, Math.max(1, t - 2)) }, hi: { t: t + 2, p: freq(arr, t + 2) } },
+      };
+    });
+  return {
+    topDD, topTD,
+    ptsList: withLadder(topPts, "avgPoints", "pts"),
+    rebList: withLadder(topReb, "avgRebounds", "reb"),
+    astList: withLadder(topAst, "avgAssists", "ast"),
+  };
+}
+
+// Secciones de jugadores (mismo formato MLB). scope: "hoy" | "este juego".
+function playerSections(pp, scope) {
+  const header = scope === "hoy" ? "Picks del día · jugadores" : "Picks de este juego · jugadores";
+  const fmtDD = (p) => `${p.team} · ${p.position || "—"} · ${p.avgPoints?.toFixed(1)} pts, ${p.avgRebounds?.toFixed(1)} reb, ${p.avgAssists?.toFixed(1)} ast en ${p.gamesPlayed} PJ${p.season ? ` (temporada ${p.season - 1}-${String(p.season).slice(2)})` : ""}${p.status === "Day-To-Day" ? " · DUDOSO" : ""}`;
+  const avgNote = `Los 3 con mejor promedio de la temporada ${scope === "hoy" ? "entre equipos con juego hoy" : "entre los dos equipos de este juego"} (sin los "Fuera"; 20+ juegos). El porcentaje grande es la frecuencia REAL con que llegó al umbral (su promedio redondeado) en los juegos que jugó de la temporada regular; también se muestra el umbral ±2. No se ajusta por rival ni por los minutos de hoy.`;
+  return [
+    { header, title: scope === "hoy" ? "Mayor probabilidad de doble-doble hoy" : "Mayor probabilidad de doble-doble", items: pp.topDD.map((p) => ({ key: p.id, name: p.name, sub: fmtDD(p), pct: p.doubleDoubleProb })) },
+    { header, title: scope === "hoy" ? "Mayor probabilidad de triple-doble hoy" : "Mayor probabilidad de triple-doble", items: pp.topTD.map((p) => ({ key: p.id, name: p.name, sub: fmtDD(p), pct: p.tripleDoubleProb })) },
+    ...[
+      ["Puntos", pp.ptsList, "avgPoints", "pts", "puntos"],
+      ["Rebotes", pp.rebList, "avgRebounds", "reb", "rebotes"],
+      ["Asistencias", pp.astList, "avgAssists", "ast", "asistencias"],
+    ].map(([label, list, avgKey, short, word]) => ({
+      header,
+      title: scope === "hoy" ? `${label}: los 3 que más promedian hoy` : `${label}: los 3 que más promedian`,
+      items: list.map((p) => ({
+        key: p.id,
+        name: p.ladder ? `${p.name} · ${p.ladder.t}+ ${word}` : p.name,
+        sub: p.ladder
+          ? `${p[avgKey].toFixed(1)} ${short} por juego · ${p.ladder.lo.t}+ en ${(p.ladder.lo.p * 100).toFixed(0)}% · ${p.ladder.hi.t}+ en ${(p.ladder.hi.p * 100).toFixed(0)}% de sus ${p.ladder.games} juegos · ${p.team}${p.status === "Day-To-Day" ? " · DUDOSO" : ""}`
+          : `${p[avgKey].toFixed(1)} ${short} por juego · ${p.team} (sin registro juego por juego suficiente)`,
+        pct: p.ladder ? p.ladder.main : null,
+        display: p.ladder ? null : `${p[avgKey].toFixed(1)}`,
+      })),
+      note: avgNote,
+    })),
+  ];
+}
+
+const PLAYER_NOTE = 'Probabilidad = frecuencia REAL de la temporada (dobles-dobles ÷ juegos jugados), sin los reportados "Fuera" por ESPN (con 20+ juegos). No se ajusta por el rival ni por los minutos de hoy. "Dudoso" = ESPN lo lista Day-To-Day.';
+
+function PickCards({ sections }) {
+  return (
+    <div className="space-y-6">
+      {sections.map((sec) => (
+        <div key={sec.title} className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+          <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>{sec.header}</div>
+          <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>{sec.title}</h2>
+          {sec.items.length === 0 ? (
+            <p className="text-[11px]" style={{ color: "#8FA599" }}>Sin datos suficientes.</p>
+          ) : (
+            <div className="space-y-3">
+              {sec.items.map((item, i) => (
+                <div key={item.key + "-" + i} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
+                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{i + 1}</div>
+                  <div className="flex-1">
+                    <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{item.name}</div>
+                    <div className="text-[11px]" style={{ color: "#8FA599" }}>{item.sub}</div>
+                  </div>
+                  <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{item.display || `${(item.pct * 100).toFixed(1)}%`}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>{sec.note || PLAYER_NOTE}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Picks de jugadores dentro del detalle de UN juego (sus dos equipos).
+function GamePlayerPicks({ game }) {
+  const [pp, setPp] = useState(null);
+  const [status, setStatus] = useState("cargando");
+  useEffect(() => {
+    let cancelled = false;
+    setStatus("cargando");
+    computePlayerPicks([{ id: game.homeId, code: game.homeCode }, { id: game.awayId, code: game.awayCode }])
+      .then((r) => { if (!cancelled) { setPp(r); setStatus("listo"); } })
+      .catch(() => { if (!cancelled) setStatus("error"); });
+    return () => { cancelled = true; };
+  }, [game.homeId, game.awayId]);
+  if (status === "cargando") return <p className="text-[11px] mb-4" style={{ color: "#8FA599" }}>Buscando los jugadores más probables de este juego…</p>;
+  if (status === "error" || !pp) return null;
+  return (
+    <div className="mb-4">
+      <PickCards sections={playerSections(pp, "juego")} />
     </div>
   );
 }
@@ -514,59 +654,9 @@ function DayPicks() {
       for (const g of pending) {
         teamsToday.push({ id: g.homeId, code: g.homeCode }, { id: g.awayId, code: g.awayCode });
       }
-      const perTeam = await Promise.all(
-        teamsToday.map(async (t) => {
-          const d = await fetch(`${BACKEND_URL}/api/nba/team/${t.id}/players`).then((r) => r.json()).catch(() => ({ players: [] }));
-          return (d.players || []).map((p) => ({ ...p, team: t.code }));
-        })
-      );
+      const { topDD, topTD, ptsList, rebList, astList } = await computePlayerPicks(teamsToday);
       if (cancelled) return;
-      const eligible = perTeam.flat().filter((p) => p.hasStats && p.status !== "Out");
-      const topBy = (key) =>
-        eligible
-          .filter((p) => p[key] != null && p[key] > 0)
-          .sort((a, b) => b[key] - a[key] || b.gamesPlayed - a.gamesPlayed || (a.name || "").localeCompare(b.name || ""))
-          .slice(0, 3);
       const topTeams = teamPicks.slice(0, 3);
-      const topDD = topBy("doubleDoubleProb");
-      const topTD = topBy("tripleDoubleProb");
-      // Rebotes / asistencias: promedio REAL por juego de la temporada (no una
-      // probabilidad: no hay distribución verificada para convertirlo).
-      const topAvg = (key) =>
-        [...eligible]
-          .filter((p) => p[key] != null)
-          .sort((a, b) => b[key] - a[key] || b.gamesPlayed - a.gamesPlayed || (a.name || "").localeCompare(b.name || ""))
-          .slice(0, 3);
-      const topPts = topAvg("avgPoints");
-      const topReb = topAvg("avgRebounds");
-      const topAst = topAvg("avgAssists");
-
-      // Registro REAL juego por juego (temporada regular, solo juegos donde
-      // jugó) de los 9 candidatos: la probabilidad de llegar a un umbral es la
-      // fracción de esos juegos en que lo logró. Umbral = promedio redondeado;
-      // se muestran también ±2.
-      const candidates = [...new Map([...topPts, ...topReb, ...topAst].map((p) => [p.id, p])).values()];
-      const gv = {};
-      await Promise.all(
-        candidates.map(async (p) => {
-          const d = await fetch(`${BACKEND_URL}/api/nba/player/${p.id}/game-values?season=${p.season}`).then((r) => r.json()).catch(() => null);
-          if (d?.values && d.games >= 20) gv[p.id] = d.values;
-        })
-      );
-      const freq = (arr, t) => arr.filter((v) => v >= t).length / arr.length;
-      const withLadder = (list, avgKey, vKey) =>
-        list.map((p) => {
-          const arr = gv[p.id]?.[vKey];
-          if (!arr) return { ...p, ladder: null };
-          const t = Math.max(1, Math.round(p[avgKey]));
-          return {
-            ...p,
-            ladder: { t, games: arr.length, main: freq(arr, t), lo: { t: Math.max(1, t - 2), p: freq(arr, Math.max(1, t - 2)) }, hi: { t: t + 2, p: freq(arr, t + 2) } },
-          };
-        });
-      const ptsList = withLadder(topPts, "avgPoints", "pts");
-      const rebList = withLadder(topReb, "avgRebounds", "reb");
-      const astList = withLadder(topAst, "avgAssists", "ast");
 
       if (topTeams.length || topDD.length || topTD.length) {
         const rows = [
@@ -600,9 +690,6 @@ function DayPicks() {
     );
   }
 
-  const fmtDD = (p) => `${p.team} · ${p.position || "—"} · ${p.avgPoints?.toFixed(1)} pts, ${p.avgRebounds?.toFixed(1)} reb, ${p.avgAssists?.toFixed(1)} ast en ${p.gamesPlayed} PJ${p.season ? ` (temporada ${p.season - 1}-${String(p.season).slice(2)})` : ""}${p.status === "Day-To-Day" ? " · DUDOSO" : ""}`;
-  const subAvg = (p) => `${p.team} · ${p.position || "—"} · ${p.avgMinutes?.toFixed(1)} min por juego · ${p.gamesPlayed} PJ${p.season ? ` (temporada ${p.season - 1}-${String(p.season).slice(2)})` : ""}${p.status === "Day-To-Day" ? " · DUDOSO" : ""}`;
-  const avgNote = 'Los 3 con mejor promedio de la temporada entre equipos con juego hoy (sin los "Fuera"; 20+ juegos). El porcentaje grande es la frecuencia REAL con que llegó al umbral (su promedio redondeado) en los juegos que jugó de la temporada regular; también se muestra el umbral ±2. No se ajusta por rival ni por los minutos de hoy.';
   const sections = [
     {
       header: "Picks del día · equipos",
@@ -610,64 +697,9 @@ function DayPicks() {
       items: picks.topTeams.map((t) => ({ key: t.teamCode, name: t.team, sub: `le gana a ${t.opponent}`, pct: t.prob })),
       note: "Mismo modelo que el detalle de cada juego (Log5 sobre Expectativa Pitagórica + ventaja de casa + forma + casa/ruta + calendario + descanso + lesiones reales).",
     },
-    {
-      header: "Picks del día · jugadores",
-      title: "Mayor probabilidad de doble-doble hoy",
-      items: picks.topDD.map((p) => ({ key: p.id, name: p.name, sub: fmtDD(p), pct: p.doubleDoubleProb })),
-    },
-    {
-      header: "Picks del día · jugadores",
-      title: "Mayor probabilidad de triple-doble hoy",
-      items: picks.topTD.map((p) => ({ key: p.id, name: p.name, sub: fmtDD(p), pct: p.tripleDoubleProb })),
-    },
-    ...[
-      ["Puntos", picks.ptsList, "avgPoints", "pts", "puntos"],
-      ["Rebotes", picks.rebList, "avgRebounds", "reb", "rebotes"],
-      ["Asistencias", picks.astList, "avgAssists", "ast", "asistencias"],
-    ].map(([label, list, avgKey, short, word]) => ({
-      header: "Picks del día · jugadores",
-      title: `${label}: los 3 que más promedian hoy`,
-      items: list.map((p) => ({
-        key: p.id,
-        name: p.ladder ? `${p.name} · ${p.ladder.t}+ ${word}` : p.name,
-        sub: p.ladder
-          ? `${p[avgKey].toFixed(1)} ${short} por juego · ${p.ladder.lo.t}+ en ${(p.ladder.lo.p * 100).toFixed(0)}% · ${p.ladder.hi.t}+ en ${(p.ladder.hi.p * 100).toFixed(0)}% de sus ${p.ladder.games} juegos · ${p.team}${p.status === "Day-To-Day" ? " · DUDOSO" : ""}`
-          : `${p[avgKey].toFixed(1)} ${short} por juego · ${p.team} (sin registro juego por juego suficiente)`,
-        pct: p.ladder ? p.ladder.main : null,
-        display: p.ladder ? null : `${p[avgKey].toFixed(1)}`,
-      })),
-      note: avgNote,
-    })),
+    ...playerSections(picks, "hoy"),
   ];
-  const playerNote = 'Probabilidad = frecuencia REAL de la temporada (dobles-dobles ÷ juegos jugados), de los jugadores de equipos con juego hoy, sin los reportados "Fuera" por ESPN (con 20+ juegos). No se ajusta por el rival ni por los minutos de hoy. "Dudoso" = ESPN lo lista Day-To-Day.';
-
-  return (
-    <div className="space-y-6">
-      {sections.map((sec) => (
-        <div key={sec.title} className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
-          <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>{sec.header}</div>
-          <h2 className="text-xl font-bold mb-4" style={{ color: "#EDEAE1", fontFamily: "'Arial Narrow', Arial, sans-serif" }}>{sec.title}</h2>
-          {sec.items.length === 0 ? (
-            <p className="text-[11px]" style={{ color: "#8FA599" }}>Sin datos suficientes hoy.</p>
-          ) : (
-            <div className="space-y-3">
-              {sec.items.map((item, i) => (
-                <div key={item.key + "-" + i} className="flex items-center gap-3 p-3 rounded-lg border" style={{ background: "#12281E", borderColor: i === 0 ? "#FFB627" : "#1F3D30" }}>
-                  <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ background: "#1A362A", color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{i + 1}</div>
-                  <div className="flex-1">
-                    <div className="text-sm font-semibold" style={{ color: "#EDEAE1" }}>{item.name}</div>
-                    <div className="text-[11px]" style={{ color: "#8FA599" }}>{item.sub}</div>
-                  </div>
-                  <div className="text-xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>{item.display || `${(item.pct * 100).toFixed(1)}%`}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          <p className="text-[10px] mt-3 leading-relaxed" style={{ color: "#5A7368" }}>{sec.note || playerNote}</p>
-        </div>
-      ))}
-    </div>
-  );
+  return <PickCards sections={sections} />;
 }
 
 // ---- Tabla de posiciones real ----
