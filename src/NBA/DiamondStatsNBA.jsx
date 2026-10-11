@@ -765,19 +765,19 @@ function NbaBacktestStatus() {
   );
 }
 
-function WinProbAccuracy() {
+function WinProbAccuracy({ since }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
   const [checking, setChecking] = useState(false);
 
   const load = () => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/nba/predictions/accuracy`)
+    fetch(`${BACKEND_URL}/api/nba/predictions/accuracy${since ? `?since=${since}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [since]);
 
   const checkNow = () => {
     setChecking(true);
@@ -842,19 +842,19 @@ function WinProbAccuracy() {
   );
 }
 
-function OverUnderAccuracy() {
+function OverUnderAccuracy({ since }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
   const [checking, setChecking] = useState(false);
 
   const load = () => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/nba/overunder/accuracy`)
+    fetch(`${BACKEND_URL}/api/nba/overunder/accuracy${since ? `?since=${since}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [since]);
 
   const checkNow = () => {
     setChecking(true);
@@ -910,19 +910,19 @@ function OverUnderAccuracy() {
   );
 }
 
-function NbaPicksAccuracy() {
+function NbaPicksAccuracy({ since }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
   const [checking, setChecking] = useState(false);
 
   const load = () => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/nba/picks/accuracy`)
+    fetch(`${BACKEND_URL}/api/nba/picks/accuracy${since ? `?since=${since}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [since]);
 
   const checkNow = () => {
     setChecking(true);
@@ -984,7 +984,33 @@ function NbaPicksAccuracy() {
   );
 }
 
+// Selector "medir desde": la precisión se calcula solo con predicciones de
+// esa fecha en adelante (útil después de un cambio de modelo, para no mezclar
+// predicciones viejas con las nuevas). Vacío = todo el historial.
+function SinceBar({ since, setSince }) {
+  return (
+    <div className="rounded-xl border p-4 mb-4 flex flex-wrap items-center gap-2" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <span className="text-[11px] tracking-widest uppercase" style={{ color: "#8FA599" }}>Medir desde</span>
+      <input
+        type="date"
+        value={since}
+        onChange={(e) => setSince(e.target.value)}
+        className="px-2 py-1 rounded-lg text-xs"
+        style={{ background: "#12281E", color: "#EDEAE1", border: "1px solid #1F3D30" }}
+      />
+      <button
+        onClick={() => setSince("")}
+        className="px-3 py-1 rounded-lg text-xs font-semibold"
+        style={{ background: since ? "#12281E" : "#FFB627", color: since ? "#8FA599" : "#0B1F17", border: "1px solid " + (since ? "#1F3D30" : "#FFB627") }}
+      >
+        Todo el historial
+      </button>
+    </div>
+  );
+}
+
 export default function DiamondStatsNBA({ onBackToMenu }) {
+  const [since, setSince] = useState("");
   const [view, setView] = useState("juegos"); // "juegos" | "posiciones" | "precision"
   const [selectedGame, setSelectedGame] = useState(null);
 
@@ -1050,9 +1076,10 @@ export default function DiamondStatsNBA({ onBackToMenu }) {
         ) : (
           <>
             <NbaBacktestStatus />
-            <WinProbAccuracy />
-            <OverUnderAccuracy />
-            <NbaPicksAccuracy />
+            <SinceBar since={since} setSince={setSince} />
+            <WinProbAccuracy since={since} />
+            <OverUnderAccuracy since={since} />
+            <NbaPicksAccuracy since={since} />
           </>
         )}
 

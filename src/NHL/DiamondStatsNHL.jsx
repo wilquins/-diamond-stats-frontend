@@ -818,20 +818,20 @@ function Standings() {
 }
 
 // ---- Precisión real de probabilidad de ganar ----
-function WinProbAccuracy() {
+function WinProbAccuracy({ since }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
   const [checking, setChecking] = useState(false);
 
   const load = () => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/nhl/predictions/accuracy`)
+    fetch(`${BACKEND_URL}/api/nhl/predictions/accuracy${since ? `?since=${since}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [since]);
 
   const checkNow = () => {
     setChecking(true);
@@ -897,20 +897,20 @@ function WinProbAccuracy() {
 }
 
 // ---- Precisión real de Over/Under ----
-function OverUnderAccuracy() {
+function OverUnderAccuracy({ since }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
   const [checking, setChecking] = useState(false);
 
   const load = () => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/nhl/overunder/accuracy`)
+    fetch(`${BACKEND_URL}/api/nhl/overunder/accuracy${since ? `?since=${since}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [since]);
 
   const checkNow = () => {
     setChecking(true);
@@ -1003,20 +1003,20 @@ function NhlBacktestStatus() {
   );
 }
 
-function NhlPicksAccuracy() {
+function NhlPicksAccuracy({ since }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
   const [checking, setChecking] = useState(false);
 
   const load = () => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/nhl/picks/accuracy`)
+    fetch(`${BACKEND_URL}/api/nhl/picks/accuracy${since ? `?since=${since}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [since]);
 
   const checkNow = () => {
     setChecking(true);
@@ -1096,7 +1096,33 @@ function NhlPicksAccuracy() {
   );
 }
 
+// Selector "medir desde": la precisión se calcula solo con predicciones de
+// esa fecha en adelante (útil después de un cambio de modelo, para no mezclar
+// predicciones viejas con las nuevas). Vacío = todo el historial.
+function SinceBar({ since, setSince }) {
+  return (
+    <div className="rounded-xl border p-4 mb-4 flex flex-wrap items-center gap-2" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <span className="text-[11px] tracking-widest uppercase" style={{ color: "#8FA599" }}>Medir desde</span>
+      <input
+        type="date"
+        value={since}
+        onChange={(e) => setSince(e.target.value)}
+        className="px-2 py-1 rounded-lg text-xs"
+        style={{ background: "#12281E", color: "#EDEAE1", border: "1px solid #1F3D30" }}
+      />
+      <button
+        onClick={() => setSince("")}
+        className="px-3 py-1 rounded-lg text-xs font-semibold"
+        style={{ background: since ? "#12281E" : "#FFB627", color: since ? "#8FA599" : "#0B1F17", border: "1px solid " + (since ? "#1F3D30" : "#FFB627") }}
+      >
+        Todo el historial
+      </button>
+    </div>
+  );
+}
+
 export default function DiamondStatsNHL({ onBackToMenu }) {
+  const [since, setSince] = useState("");
   const [view, setView] = useState("juegos"); // "juegos" | "picks" | "posiciones" | "precision"
   const [selectedGame, setSelectedGame] = useState(null);
 
@@ -1185,9 +1211,10 @@ export default function DiamondStatsNHL({ onBackToMenu }) {
         ) : (
           <>
             <NhlBacktestStatus />
-            <WinProbAccuracy />
-            <NhlPicksAccuracy />
-            <OverUnderAccuracy />
+            <SinceBar since={since} setSince={setSince} />
+            <WinProbAccuracy since={since} />
+            <NhlPicksAccuracy since={since} />
+            <OverUnderAccuracy since={since} />
           </>
         )}
 

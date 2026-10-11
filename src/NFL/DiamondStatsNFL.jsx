@@ -23,8 +23,23 @@ const NFL_HOME_ADVANTAGE = 0.032;
 // equipo, y clima real cuando es adverso (viento fuerte, lluvia
 // probable, o frío extremo) — el local, ya acostumbrado a sus propias
 // condiciones, tiene una ventaja leve real en esos casos.
+// Ventaja de casa MEDIDA de la liga (últimas 3 temporadas de récords oficiales
+// de casa, vía backend); si no responde, se usa la constante citada de arriba.
+let nflLeagueHomePromise = null;
+function getNflLeagueHome() {
+  if (!nflLeagueHomePromise) {
+    nflLeagueHomePromise = fetch(`${BACKEND_URL}/api/nfl/league-home`)
+      .then((r) => r.json())
+      .then((d) => (d && d.homeWinPct != null && d.games >= 400 ? d.homeWinPct : null))
+      .catch(() => { nflLeagueHomePromise = null; return null; });
+  }
+  return nflLeagueHomePromise;
+}
+
 async function computeNflWinProb(home, away, weather, eventId) {
   if (!home || !away) return null;
+  const leagueHome = await getNflLeagueHome();
+  const homeAdvantage = leagueHome != null ? leagueHome - 0.5 : NFL_HOME_ADVANTAGE;
 
   const gamesHome = home.wins + home.losses + home.ties;
   const gamesAway = away.wins + away.losses + away.ties;
@@ -111,8 +126,11 @@ async function computeNflWinProb(home, away, weather, eventId) {
   const homeAtHomePct = recPct(homeHA?.homeRecord);
   const awayOnRoadPct = recPct(awayHA?.awayRecord);
   if (homeAtHomePct != null && awayOnRoadPct != null) {
-    const homeAtHomeDelta = homeAtHomePct - (home.winPercent ?? 0.5);
-    const awayOnRoadDelta = awayOnRoadPct - (away.winPercent ?? 0.5);
+    // Se descuenta la ventaja de casa de la liga: el récord de casa ya la
+    // incluye y se suma aparte (antes se contaba dos veces).
+    const lgEdge = leagueHome != null ? leagueHome - 0.5 : NFL_HOME_ADVANTAGE;
+    const homeAtHomeDelta = homeAtHomePct - (home.winPercent ?? 0.5) - lgEdge;
+    const awayOnRoadDelta = awayOnRoadPct - (away.winPercent ?? 0.5) + lgEdge;
     const homeRoadAdjRaw = (homeAtHomeDelta - awayOnRoadDelta) * 0.3;
     // El récord de casa/ruta se parte a la mitad de los partidos de la
     // temporada (2-3 en casa, 2-3 en ruta a estas alturas) — todavía
@@ -149,7 +167,7 @@ async function computeNflWinProb(home, away, weather, eventId) {
   // su suma se limita a ±0.10. El tope es una decisión SUBJETIVA (no hay
   // coeficiente citado); el backtesting dirá si hay que moverlo.
   const secondary = Math.max(-0.1, Math.min(0.1, turnoverAdj + h2hAdj + homeRoadAdj + weatherAdj + sosAdj));
-  let prob = baseProb + NFL_HOME_ADVANTAGE + secondary;
+  let prob = baseProb + homeAdvantage + secondary;
 
   // FPI real de ESPN (su propio modelo, calibrado con años de fuerza de
   // roster) — se usa como referencia externa, con más peso cuanto menos
@@ -794,20 +812,20 @@ function Standings() {
 
 // ---- Precisión real de Over/Under ----
 // ---- Precisión real de probabilidad de ganar ----
-function WinProbAccuracy() {
+function WinProbAccuracy({ since }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
   const [checking, setChecking] = useState(false);
 
   const load = () => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/nfl/predictions/accuracy`)
+    fetch(`${BACKEND_URL}/api/nfl/predictions/accuracy${since ? `?since=${since}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [since]);
 
   const checkNow = () => {
     setChecking(true);
@@ -873,20 +891,20 @@ function WinProbAccuracy() {
 }
 
 // ---- Precisión real de Picks del día (equipo + touchdown) ----
-function NflPicksAccuracy() {
+function NflPicksAccuracy({ since }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
   const [checking, setChecking] = useState(false);
 
   const load = () => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/nfl/picks/accuracy`)
+    fetch(`${BACKEND_URL}/api/nfl/picks/accuracy${since ? `?since=${since}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [since]);
 
   const checkNow = () => {
     setChecking(true);
@@ -951,20 +969,20 @@ function NflPicksAccuracy() {
   );
 }
 
-function OverUnderAccuracy() {
+function OverUnderAccuracy({ since }) {
   const [data, setData] = useState(null);
   const [status, setStatus] = useState("cargando");
   const [checking, setChecking] = useState(false);
 
   const load = () => {
     setStatus("cargando");
-    fetch(`${BACKEND_URL}/api/nfl/overunder/accuracy`)
+    fetch(`${BACKEND_URL}/api/nfl/overunder/accuracy${since ? `?since=${since}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setData(d); setStatus("listo"); })
       .catch(() => setStatus("error"));
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [since]);
 
   const checkNow = () => {
     setChecking(true);
@@ -1027,7 +1045,33 @@ function OverUnderAccuracy() {
   );
 }
 
+// Selector "medir desde": la precisión se calcula solo con predicciones de
+// esa fecha en adelante (útil después de un cambio de modelo, para no mezclar
+// predicciones viejas con las nuevas). Vacío = todo el historial.
+function SinceBar({ since, setSince }) {
+  return (
+    <div className="rounded-xl border p-4 mb-4 flex flex-wrap items-center gap-2" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
+      <span className="text-[11px] tracking-widest uppercase" style={{ color: "#8FA599" }}>Medir desde</span>
+      <input
+        type="date"
+        value={since}
+        onChange={(e) => setSince(e.target.value)}
+        className="px-2 py-1 rounded-lg text-xs"
+        style={{ background: "#12281E", color: "#EDEAE1", border: "1px solid #1F3D30" }}
+      />
+      <button
+        onClick={() => setSince("")}
+        className="px-3 py-1 rounded-lg text-xs font-semibold"
+        style={{ background: since ? "#12281E" : "#FFB627", color: since ? "#8FA599" : "#0B1F17", border: "1px solid " + (since ? "#1F3D30" : "#FFB627") }}
+      >
+        Todo el historial
+      </button>
+    </div>
+  );
+}
+
 export default function DiamondStatsNFL({ onBackToMenu }) {
+  const [since, setSince] = useState("");
   const [view, setView] = useState("juegos"); // "juegos" | "picks" | "posiciones" | "precision"
   const [selectedGame, setSelectedGame] = useState(null);
 
@@ -1115,9 +1159,10 @@ export default function DiamondStatsNFL({ onBackToMenu }) {
           <Standings />
         ) : (
           <>
-            <WinProbAccuracy />
-            <NflPicksAccuracy />
-            <OverUnderAccuracy />
+            <SinceBar since={since} setSince={setSince} />
+            <WinProbAccuracy since={since} />
+            <NflPicksAccuracy since={since} />
+            <OverUnderAccuracy since={since} />
           </>
         )}
 

@@ -183,6 +183,7 @@ function toGameProbability(perAbPct, abPerGame) {
 // (una completa en la pantalla, otra simplificada en el guardado
 // automático) — eso fue justo el error que corregimos.
 async function computeFullHomeWinProb(game) {
+  await ensureLeagueHome();
   const recHome = TEAM_RECORDS[game.homeCode];
   const recAway = TEAM_RECORDS[game.awayCode];
   const stadium = STADIUMS[game.homeCode];
@@ -279,8 +280,12 @@ async function computeFullHomeWinProb(game) {
   // — no simétrico, porque a cada uno le importa su propio lado. Si el
   // local es genuinamente mejor en casa que su promedio, suma; si el
   // visitante es genuinamente mejor en ruta que su promedio, resta.
-  const homeAtHomeDelta = winPct(homeSit?.homeRecord) != null ? winPct(homeSit.homeRecord) - recHome.wpct : 0;
-  const awayOnRoadDelta = winPct(awaySit?.awayRecord) != null ? winPct(awaySit.awayRecord) - recAway.wpct : 0;
+  // Se DESCUENTA la ventaja de casa de la liga: el récord de casa de un
+  // equipo ya incluye ese ~+2.9% que HOME_ADVANTAGE suma por separado, así
+  // que sin este descuento la ventaja de casa se contaba dos veces.
+  const lgEdge = LEAGUE_HOME_WIN_PCT != null ? LEAGUE_HOME_WIN_PCT - 0.5 : 0;
+  const homeAtHomeDelta = winPct(homeSit?.homeRecord) != null ? winPct(homeSit.homeRecord) - recHome.wpct - lgEdge : 0;
+  const awayOnRoadDelta = winPct(awaySit?.awayRecord) != null ? winPct(awaySit.awayRecord) - recAway.wpct + lgEdge : 0;
   const homeRoadAdj = (homeAtHomeDelta - awayOnRoadDelta) * 0.3;
 
   const bullpenAdj =
@@ -551,6 +556,31 @@ async function computeTodaysPicks() {
   // mezclarla igual sería impreciso. El ajuste de BABIP SÍ se aplica,
   // pero solo a los 15 candidatos ya filtrados por temporada — igual
   // que Hit, para no volver a hacer lento a Picks del día.
+  // Regresión a la media del sencillo: con una muestra de temporada chica o
+  // incluso normal, el ritmo de sencillos de un bateador tiene mucha suerte
+  // (el top-15 de "más sencillos" selecciona justo a los afortunados).
+  // La tasa de sencillos se estabiliza (50% de confiabilidad) a ~500 PA
+  // (https://grantland.com/the-triangle/fantasy-fiesta-when-can-we-trust-the-numbers/,
+  // trabajo de Russell Carleton; otras estimaciones dan ~290 PA, se usa la
+  // más conservadora). Se usa AB como aproximación de PA. La tasa promedio
+  // de la liga se MIDE de los bateadores de los equipos que juegan hoy.
+  // Backtesting real previo: Sencillos acertó 53.3% (92 picks) con ~70% predicho.
+  const SINGLE_STABILIZATION_PA = 500;
+  const lgSingleRate = (() => {
+    let sg = 0, ab = 0;
+    for (const h of allHittersRaw) { sg += Math.max(0, h.h - h.doubles - h.triples - h.hr); ab += h.ab; }
+    return ab > 0 ? sg / ab : null;
+  })();
+  const shrinkSingleProb = (probPct, player) => {
+    if (lgSingleRate == null || !player.ab || !player.g) return probPct;
+    const abPerGame = player.ab / player.g;
+    const p = Math.min(0.99, Math.max(0.001, probPct / 100));
+    const perAb = 1 - Math.pow(1 - p, 1 / abPerGame); // tasa por turno equivalente
+    const w = player.ab / (player.ab + SINGLE_STABILIZATION_PA);
+    const shrunk = w * perAb + (1 - w) * lgSingleRate;
+    return (1 - Math.pow(1 - shrunk, abPerGame)) * 100;
+  };
+
   const singlesSeasonRanked = allHitters
     .map((p) => {
       const g = gameByCode[p.team];
@@ -567,7 +597,7 @@ async function computeTodaysPicks() {
         opposingPitcherId = isHomeBatter ? g.awayPitcher?.id : g.homePitcher?.id;
       }
       const gp = gameProbabilities(p, opposingPitcher, dayNight);
-      return { player: p, seasonProb: gp.single, opposingPitcher, dayNight, opposingTeamCode, opposingPitcherId, isHomeBatter };
+      return { player: p, seasonProb: shrinkSingleProb(gp.single, p), opposingPitcher, dayNight, opposingTeamCode, opposingPitcherId, isHomeBatter };
     })
     .sort((a, b) => b.seasonProb - a.seasonProb)
     .slice(0, 15);
@@ -595,7 +625,7 @@ async function computeTodaysPicks() {
         if (player.matchupSplits !== undefined) {
           // Ya se consultó antes (mismo jugador top también en Hit) — se
           // reutiliza sin volver a pedirlo.
-          const base = player.babipAdjustedAvg != null ? gameProbabilities(player, opposingPitcher, dayNight).single : seasonProb;
+          const base = player.babipAdjustedAvg != null ? shrinkSingleProb(gameProbabilities(player, opposingPitcher, dayNight).single, player) : seasonProb;
           return { player, prob: applyRealSplitsAdj(base, player.matchupSplits, "single", isHomeBatter, player) };
         }
         const babipParams = new URLSearchParams({ atBats: player.ab, hits: player.h, homeRuns: player.hr, strikeOuts: player.strikeOuts ?? 0 });
@@ -609,7 +639,7 @@ async function computeTodaysPicks() {
         ]);
         player.babipAdjustedAvg = babipData.babipAdjustedAvg;
         player.matchupSplits = splitsData;
-        const base = player.babipAdjustedAvg != null ? gameProbabilities(player, opposingPitcher, dayNight).single : seasonProb;
+        const base = player.babipAdjustedAvg != null ? shrinkSingleProb(gameProbabilities(player, opposingPitcher, dayNight).single, player) : seasonProb;
         return { player, prob: applyRealSplitsAdj(base, splitsData, "single", isHomeBatter, player) };
       })
     )
@@ -810,7 +840,27 @@ const HOME_PLATE_ORIENTATION = {
   NYY: 45,  // Yankee Stadium — noreste (aprox.)
 };
 
-const HOME_ADVANTAGE = 0.024; // % histórico real de ventaja de jugar de local en MLB (~54% vs 50%)
+// Ventaja de jugar de local en MLB. Valor de respaldo (histórico, ~2.4%); en
+// cuanto responde el backend se reemplaza por la MEDIDA de los récords de
+// casa de los 30 equipos (2026 completo: 1,284 de 2,429 = 52.9%).
+let HOME_ADVANTAGE = 0.024;
+let LEAGUE_HOME_WIN_PCT = null; // % de victorias de local medido de la liga
+let leagueHomePromise = null;
+function ensureLeagueHome() {
+  if (!leagueHomePromise) {
+    leagueHomePromise = fetch(`${BACKEND_URL}/api/mlb/league-home`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (d && d.homeWinPct != null && d.games >= 1000) {
+          LEAGUE_HOME_WIN_PCT = d.homeWinPct;
+          HOME_ADVANTAGE = d.homeWinPct - 0.5;
+        }
+      })
+      .catch(() => { leagueHomePromise = null; });
+  }
+  return leagueHomePromise;
+}
+ensureLeagueHome(); // se mide al cargar la app; HOME_ADVANTAGE se actualiza solo
 
 // ---- Abridores reales por equipo, temporada 2026 (fuente: MLB.com / reportes de rotación, al 10 ago 2026) ----
 // Se usa el as/abridor probable más reciente de cada equipo. eraConfirmed:false
@@ -2051,15 +2101,20 @@ function AccuracyView() {
   const [picksStatus, setPicksStatus] = useState("cargando");
   const [checkingPicks, setCheckingPicks] = useState(false);
 
-  const loadPicks = () => {
+  // Fecha de la corrección de Sencillos (regresión a la media del ritmo de
+  // sencillos): permite medir solo los picks hechos con el modelo nuevo.
+  const PICKS_FIX_DATE = "2026-10-12";
+  const [picksOnlyNew, setPicksOnlyNew] = useState(false);
+
+  const loadPicks = (onlyNew = picksOnlyNew) => {
     setPicksStatus("cargando");
-    fetch(`${BACKEND_URL}/api/picks/accuracy`)
+    fetch(`${BACKEND_URL}/api/picks/accuracy${onlyNew ? `?since=${PICKS_FIX_DATE}` : ""}`)
       .then((r) => r.json())
       .then((d) => { setPicksData(d); setPicksStatus("listo"); })
       .catch(() => setPicksStatus("error"));
   };
 
-  useEffect(() => { loadPicks(); }, []);
+  useEffect(() => { loadPicks(picksOnlyNew); }, [picksOnlyNew]);
 
   const checkPicksNow = () => {
     setCheckingPicks(true);
@@ -2172,7 +2227,7 @@ function AccuracyView() {
     </div>
 
     <OverUnderAccuracyView onlyRecent={onlyRecent} calibrationFixDate={CALIBRATION_FIX_DATE} />
-    <PicksAccuracyView picksData={picksData} picksStatus={picksStatus} checkingPicks={checkingPicks} checkPicksNow={checkPicksNow} />
+    <PicksAccuracyView picksData={picksData} picksStatus={picksStatus} checkingPicks={checkingPicks} checkPicksNow={checkPicksNow} picksOnlyNew={picksOnlyNew} setPicksOnlyNew={setPicksOnlyNew} picksFixDate={PICKS_FIX_DATE} />
     </div>
   );
 }
@@ -2287,7 +2342,7 @@ function OverUnderAccuracyView({ onlyRecent, calibrationFixDate }) {
   );
 }
 
-function PicksAccuracyView({ picksData, picksStatus, checkingPicks, checkPicksNow }) {
+function PicksAccuracyView({ picksData, picksStatus, checkingPicks, checkPicksNow, picksOnlyNew, setPicksOnlyNew, picksFixDate }) {
   return (
     <div className="rounded-xl border p-6" style={{ background: "#0F251C", borderColor: "#1F3D30" }}>
       <div className="text-[11px] tracking-widest uppercase mb-1" style={{ color: "#8FA599" }}>
@@ -2304,6 +2359,13 @@ function PicksAccuracyView({ picksData, picksStatus, checkingPicks, checkPicksNo
         style={{ background: "#1A362A", color: "#FFB627", border: "1px solid #2A4D3B", opacity: checkingPicks ? 0.6 : 1 }}
       >
         {checkingPicks ? "Revisando resultados reales…" : "Revisar picks de días anteriores"}
+      </button>
+      <button
+        onClick={() => setPicksOnlyNew(!picksOnlyNew)}
+        className="mb-4 ml-2 px-3 py-1.5 rounded-lg text-xs font-semibold"
+        style={{ background: picksOnlyNew ? "#FFB627" : "#12281E", color: picksOnlyNew ? "#0B1F17" : "#8FA599", border: "1px solid " + (picksOnlyNew ? "#FFB627" : "#1F3D30") }}
+      >
+        {picksOnlyNew ? `✓ Solo desde ${picksFixDate} (Sencillos corregido)` : "Ver todo el historial"}
       </button>
 
       {picksStatus === "cargando" && <p className="text-[11px]" style={{ color: "#8FA599" }}>Cargando…</p>}
@@ -2323,18 +2385,21 @@ function PicksAccuracyView({ picksData, picksStatus, checkingPicks, checkPicksNo
                 {picksData.batters.accuracy != null ? `${(picksData.batters.accuracy * 100).toFixed(1)}%` : "—"}
               </div>
               <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Bateadores ({picksData.batters.total})</div>
+              {picksData.batters.avgPredicted != null && <div className="text-[10px] mt-0.5" style={{ color: "#5A7368" }}>predijo {(picksData.batters.avgPredicted * 100).toFixed(0)}% en promedio</div>}
             </div>
             <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
               <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
                 {picksData.singles.accuracy != null ? `${(picksData.singles.accuracy * 100).toFixed(1)}%` : "—"}
               </div>
               <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Sencillos ({picksData.singles.total})</div>
+              {picksData.singles.avgPredicted != null && <div className="text-[10px] mt-0.5" style={{ color: "#5A7368" }}>predijo {(picksData.singles.avgPredicted * 100).toFixed(0)}% en promedio</div>}
             </div>
             <div className="p-3.5 rounded-lg border text-center" style={{ background: "#12281E", borderColor: "#1F3D30" }}>
               <div className="text-2xl font-black tabular-nums" style={{ color: "#FFB627", fontFamily: "ui-monospace, monospace" }}>
                 {picksData.teams.accuracy != null ? `${(picksData.teams.accuracy * 100).toFixed(1)}%` : "—"}
               </div>
               <div className="text-[10px] tracking-widest uppercase mt-1" style={{ color: "#8FA599" }}>Equipos ({picksData.teams.total})</div>
+              {picksData.teams.avgPredicted != null && <div className="text-[10px] mt-0.5" style={{ color: "#5A7368" }}>predijo {(picksData.teams.avgPredicted * 100).toFixed(0)}% en promedio</div>}
             </div>
           </div>
 
