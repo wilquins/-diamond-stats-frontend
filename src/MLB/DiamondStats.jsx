@@ -2720,6 +2720,16 @@ export default function DiamondStats({ onBackToMenu }) {
 
   return (
     <div className="min-h-screen w-full" style={{ background: "#0B1F17" }}>
+      {onBackToMenu && (
+        <button
+          onClick={onBackToMenu}
+          aria-label="Elegir otro deporte"
+          className="fixed z-50 text-[12px] font-bold px-4 py-3 rounded-full shadow-lg"
+          style={{ left: "16px", bottom: "calc(16px + env(safe-area-inset-bottom))", background: "#FFB627", color: "#0B1F17" }}
+        >
+          ← Deportes
+        </button>
+      )}
       <div className="max-w-5xl mx-auto px-4 py-8">
         {/* Header estilo scoreboard */}
         <div className="mb-8 relative">
