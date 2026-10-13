@@ -287,6 +287,38 @@ function TeamInjuries({ teamId, teamName }) {
   );
 }
 
+// Guarda automáticamente la predicción y el Over/Under de los juegos que
+// empiezan en las próximas 30 horas (mismo cálculo, con clima real, que el
+// detalle del juego y el Pick del día), sin necesidad de abrir cada juego.
+// El servidor ignora duplicados (la primera predicción gana).
+async function autoSaveNflGames(games, week) {
+  const standingsData = await fetch(`${BACKEND_URL}/api/nfl/standings`).then((r) => r.json()).catch(() => ({ teams: [] }));
+  const map = Object.fromEntries((standingsData.teams || []).map((t) => [t.code, t]));
+  const now = Date.now();
+  const soon = (games || []).filter((g) => g.status === "Scheduled" && new Date(g.date).getTime() - now <= 30 * 3600 * 1000 && new Date(g.date).getTime() > now);
+  for (const g of soon) {
+    if (!map[g.homeCode] || !map[g.awayCode]) continue;
+    const wx = await fetch(`${BACKEND_URL}/api/nfl/weather/${g.homeCode}?gameTime=${encodeURIComponent(g.date)}`).then((r) => r.json()).catch(() => null);
+    const gameDate = new Date(g.date).toISOString().slice(0, 10);
+    const r = await computeNflWinProb(map[g.homeCode], map[g.awayCode], wx, g.id).catch(() => null);
+    if (r) {
+      await fetch(`${BACKEND_URL}/api/nfl/predictions/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game_date: gameDate, week: week || null, home_code: g.homeCode, away_code: g.awayCode, home_win_prob: r.prob }),
+      }).catch(() => {});
+    }
+    const ou = computeNflOverUnder(map[g.homeCode], map[g.awayCode], wx);
+    if (ou) {
+      await fetch(`${BACKEND_URL}/api/nfl/overunder/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ game_date: gameDate, week: week || null, home_code: g.homeCode, away_code: g.awayCode, line: ou.line, over_prob: ou.overProb, expected_total: ou.expectedTotal }),
+      }).catch(() => {});
+    }
+  }
+}
+
 // ---- Lista compacta de juegos de la semana ----
 function GamesList({ onSelect }) {
   const [data, setData] = useState(null);
@@ -296,7 +328,7 @@ function GamesList({ onSelect }) {
     let cancelled = false;
     fetch(`${BACKEND_URL}/api/nfl/games`)
       .then((r) => r.json())
-      .then((d) => { if (!cancelled) { setData(d); setStatus("listo"); } })
+      .then((d) => { if (!cancelled) { setData(d); setStatus("listo"); autoSaveNflGames(d.games, d.week).catch(() => {}); } })
       .catch(() => { if (!cancelled) setStatus("error"); });
     return () => { cancelled = true; };
   }, []);
