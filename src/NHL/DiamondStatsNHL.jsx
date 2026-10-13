@@ -58,13 +58,19 @@ const GOALIE_VS_SHRINK_SHOTS = 600;
 const GOALIE_WIN_PER_GOAL = 1 / 6;
 const GOALIE_VS_CAP = 0.03;
 
-function goalieVsEffect(vs) {
+// Goles por juego que el portero ataja de más (+) o de menos (-) contra este
+// rival, ya encogidos por pocos tiros y con el mismo tope que el % de ganar.
+function goalieVsGoals(vs) {
   const t = vs?.vsTeam, o = vs?.overall;
   if (!t || !o || t.savePct == null || o.savePct == null || t.starts < GOALIE_VS_MIN_STARTS || !o.starts) return 0;
   const shotsPerStart = o.shotsAgainst / o.starts;
-  const goalsSaved = (t.savePct - o.savePct) * shotsPerStart; // goles/juego mejor (+) o peor (-) que su normal
   const shrink = t.shotsAgainst / (t.shotsAgainst + GOALIE_VS_SHRINK_SHOTS);
-  return Math.max(-GOALIE_VS_CAP, Math.min(GOALIE_VS_CAP, goalsSaved * GOALIE_WIN_PER_GOAL * shrink));
+  const capGoals = GOALIE_VS_CAP / GOALIE_WIN_PER_GOAL;
+  return Math.max(-capGoals, Math.min(capGoals, (t.savePct - o.savePct) * shotsPerStart * shrink));
+}
+
+function goalieVsEffect(vs) {
+  return goalieVsGoals(vs) * GOALIE_WIN_PER_GOAL;
 }
 
 // Agrega g.home.vs / g.away.vs (el portero local enfrenta al visitante y viceversa).
@@ -218,6 +224,10 @@ function computeNhlOverUnder(home, away, goalies) {
   // los goles esperados del VISITANTE, y viceversa.
   expectedAwayGoals *= 1 - homeGoalieAdj;
   expectedHomeGoals *= 1 - awayGoalieAdj;
+  // Historial del portero contra este rival: goles/juego que ataja de más
+  // (+) le quitan goles al rival; de menos (-) se los suman.
+  expectedAwayGoals = Math.max(0.5, expectedAwayGoals - goalieVsGoals(goalies?.home?.vs));
+  expectedHomeGoals = Math.max(0.5, expectedHomeGoals - goalieVsGoals(goalies?.away?.vs));
 
   const expectedTotal = Math.max(1, expectedHomeGoals + expectedAwayGoals);
   const line = Math.round(expectedTotal - 0.5) + 0.5;
@@ -574,7 +584,7 @@ function GameDetail({ game, onBack }) {
                 </div>
               </div>
               <p className="text-[10px] mt-2.5 leading-relaxed" style={{ color: "#5A7368" }}>
-                Goles totales esperados: {overUnder.expectedTotal.toFixed(2)} — combina el ataque y la defensa reales de ambos equipos esta temporada de referencia{(goalies?.home?.stats || goalies?.away?.stats) ? ", ajustado por el save% real del portero titular confirmado" : ""}, pasado por una distribución de Poisson (mismo modelo que ya usamos en MLB).
+                Goles totales esperados: {overUnder.expectedTotal.toFixed(2)} — combina el ataque y la defensa reales de ambos equipos esta temporada de referencia{(goalies?.home?.stats || goalies?.away?.stats) ? ", ajustado por el save% real del portero titular (y su historial contra este rival)" : ""}, pasado por una distribución de Poisson (mismo modelo que ya usamos en MLB).
               </p>
             </>
           ) : (
