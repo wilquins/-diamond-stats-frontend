@@ -689,16 +689,22 @@ function DayPicks() {
       // se guarda para backtesting).
       const pendingGames = (gamesData.games || []).filter((g) => g.gameState === "FUT" && !g.isPreseason);
 
-      // Probabilidad de ganar de cada partido pendiente — sin portero
-      // titular aquí (consultarlo para todos los partidos de hoy sería muy
-      // pesado); el detalle completo con portero real sigue disponible al
-      // tocar cada partido específico.
+      // Probabilidad de ganar de cada partido pendiente — con el mismo
+      // cálculo (incluido el portero titular) que el detalle del juego.
       const teamPicks = [];
       for (const g of pendingGames) {
         const home = map[g.homeCode];
         const away = map[g.awayCode];
         if (!home || !away) continue;
-        const r = await computeNhlWinProb(home, away, null);
+        // Mismo portero (y mismo historial vs rival) que usa el detalle del
+        // juego, para que el % sea idéntico en todas las pantallas.
+        const gameDateET = new Date(g.startTimeUTC).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+        let gl = home.fullName && away.fullName
+          ? await fetch(`${BACKEND_URL}/api/nhl/goalies/${g.homeCode}/${g.awayCode}?date=${gameDateET}&homeName=${encodeURIComponent(home.fullName)}&awayName=${encodeURIComponent(away.fullName)}`)
+              .then((r) => r.json()).catch(() => null)
+          : null;
+        gl = await enrichGoaliesVs(gl, g.homeCode, g.awayCode);
+        const r = await computeNhlWinProb(home, away, gl);
         if (r) {
           const homeWins = r.prob >= 0.5;
           teamPicks.push({

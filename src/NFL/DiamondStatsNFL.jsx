@@ -415,13 +415,13 @@ function DayPicks() {
         return g.status === "Scheduled" && gameDate === todayET;
       });
 
-      // Probabilidad de ganar de cada partido pendiente — sin clima aquí
-      // (consultarlo para todos los partidos de hoy sería muy
-      // pesado); el detalle completo con clima real sigue disponible al
-      // tocar cada partido específico.
+      // Probabilidad de ganar de cada partido pendiente — con el mismo
+      // cálculo (incluido el clima real) que el detalle del juego.
       const teamPicks = [];
       for (const g of pendingGames) {
-        const r = await computeNflWinProb(map[g.homeCode], map[g.awayCode], null, g.id);
+        // Mismo clima que usa el detalle del juego, para que el % sea idéntico.
+        const wx = await fetch(`${BACKEND_URL}/api/nfl/weather/${g.homeCode}?gameTime=${encodeURIComponent(g.date)}`).then((r) => r.json()).catch(() => null);
+        const r = await computeNflWinProb(map[g.homeCode], map[g.awayCode], wx, g.id);
         if (r) {
           const homeWins = r.prob >= 0.5;
           teamPicks.push({
