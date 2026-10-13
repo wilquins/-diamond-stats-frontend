@@ -1,0 +1,25 @@
+name: Guardado automático DiamondStats
+
+on:
+  schedule:
+    # Horas en UTC (EDT = UTC-4): 10:00, 13:00, 16:00 y 19:00 hora del este.
+    - cron: "0 14,17,20,23 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  autosave:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Instalar navegador
+        run: |
+          npm install --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+      - name: Abrir la app y guardar
+        run: node scripts/autosave.mjs
+        env:
+          SITE_URL: https://diamondstats123.vercel.app/
