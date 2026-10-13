@@ -20,6 +20,6 @@ jobs:
           npm install --no-save playwright@1.49.1
           npx playwright install --with-deps chromium
       - name: Abrir la app y guardar
-        run: node scripts/autosave.mjs
+        run: node src/autosave.mjs
         env:
           SITE_URL: https://diamondstats123.vercel.app/
