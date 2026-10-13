@@ -310,8 +310,46 @@ async function computeFullHomeWinProb(game) {
   // este equipo rival exacto, esta temporada — un pitcher puede tener
   // buen ERA general pero le ha pateado bien (o mal) un equipo en
   // particular. Solo se activa con 2+ enfrentamientos previos reales.
+  // Historial REAL del abridor contra este equipo, varias temporadas (MLB
+  // Stats API, juego por juego): su decisión propia (G-P), entradas y carreras
+  // limpias. El ajuste usa su ERA contra ese equipo comparado con su ERA
+  // normal (no el G-P: ganar depende también del apoyo ofensivo), regresado
+  // a la media según cuántas entradas respaldan la muestra. Constantes:
+  //  - Se activa con 2+ aperturas contra ese equipo (decisión del usuario:
+  //    no hace falta que sea de por vida).
+  //  - 100 entradas de "peso" para la regresión: decisión SUBJETIVA. Con 2
+  //    aperturas (~12 entradas) el ERA es muy ruidoso y no hay evidencia
+  //    sólida de que un pitcher domine a un equipo en particular más allá
+  //    del azar y la mano de sus bateadores, así que el efecto es chico.
+  //  - La comparación es contra su ERA de las mismas temporadas (la mejor
+  //    estimación de su nivel real); su forma de ESTA temporada ya entra por
+  //    separado en el ajuste de ERA del abridor.
+  //  - 1 carrera por juego ≈ 10% de probabilidad de ganar (regla estándar
+  //    de ~10 carreras = 1 victoria).
+  //  - un abridor lanza ~6 de las 9 entradas.
+  const PVT_MIN_STARTS = 2, PVT_SHRINK_IP = 100, PVT_WIN_PER_RUN = 0.1, PVT_IP_SHARE = 6 / 9;
+  const pitcherVsEffect = (vs) => {
+    const t = vs?.vsTeam, o = vs?.overall;
+    if (!t || !o || t.era == null || o.era == null || t.starts < PVT_MIN_STARTS) return 0;
+    const shrink = t.ip / (t.ip + PVT_SHRINK_IP);
+    const raw = ((o.era - t.era) / 1) * PVT_IP_SHARE * PVT_WIN_PER_RUN * shrink;
+    return Math.max(-0.03, Math.min(0.03, raw));
+  };
+  const [homePvt, awayPvt] = await Promise.all([
+    game.homePitcher?.id ? fetch(`${BACKEND_URL}/api/pitcher/${game.homePitcher.id}/vs-team/${game.awayCode}`).then((r) => r.json()).catch(() => null) : Promise.resolve(null),
+    game.awayPitcher?.id ? fetch(`${BACKEND_URL}/api/pitcher/${game.awayPitcher.id}/vs-team/${game.homeCode}`).then((r) => r.json()).catch(() => null) : Promise.resolve(null),
+  ]);
+  const havePvt = !!(homePvt?.vsTeam || awayPvt?.vsTeam);
+  const pitcherVs = havePvt
+    ? { home: homePvt && { ...homePvt, effect: pitcherVsEffect(homePvt), name: game.homePitcher?.name }, away: awayPvt && { ...awayPvt, effect: pitcherVsEffect(awayPvt), name: game.awayPitcher?.name } }
+    : null;
+
   let pitcherHistoryAdj = 0;
-  if (h2h?.games?.length > 0) {
+  if (havePvt) {
+    // Reemplaza al cálculo viejo (que solo miraba esta temporada y el marcador
+    // del equipo): sería contar dos veces la misma información.
+    pitcherHistoryAdj = pitcherVsEffect(homePvt) - pitcherVsEffect(awayPvt);
+  } else if (h2h?.games?.length > 0) {
     const homeStarts = h2h.games.filter((g) => g.homeStarter && g.homeStarter === game.homePitcher?.name);
     const awayStarts = h2h.games.filter((g) => g.awayStarter && g.awayStarter === game.awayPitcher?.name);
     let homePersonalDelta = 0, awayPersonalDelta = 0;
@@ -395,7 +433,7 @@ async function computeFullHomeWinProb(game) {
   const CALIBRATION_TEMPERATURE = 3.0;
   const safeP = Math.min(0.985, Math.max(0.015, clampedWithEnsemble));
   const correctedProb = sigmoid(logit(safeP) / CALIBRATION_TEMPERATURE);
-  return { prob: correctedProb, rawProb: clampedWithEnsemble, espnPredictorHomeProb, homeSOS: homeSOS?.avgOpponentWinPct ?? null, awaySOS: awaySOS?.avgOpponentWinPct ?? null };
+  return { prob: correctedProb, rawProb: clampedWithEnsemble, espnPredictorHomeProb, pitcherVs, homeSOS: homeSOS?.avgOpponentWinPct ?? null, awaySOS: awaySOS?.avgOpponentWinPct ?? null };
 }
 
 // Calcula los picks reales del día — 3 bateadores y 3 equipos — con la
@@ -1198,6 +1236,7 @@ function TodayGamesHeader() {
   const [computedWinProb, setComputedWinProb] = useState(null); // probabilidad real, calculada con la MISMA función que usa el guardado — para que la pantalla y lo guardado nunca se desincronicen
   const [winProbStatus, setWinProbStatus] = useState("idle");
   const [espnPredictorHomeProb, setEspnPredictorHomeProb] = useState(null); // predictor real de ESPN, mostrado por transparencia — de dónde sale el 25% mezclado
+  const [pitcherVsDisplay, setPitcherVsDisplay] = useState(null); // historial del abridor contra el rival, por transparencia
   const [sosDisplay, setSosDisplay] = useState(null); // { home, away } — fuerza de calendario real de cada equipo, por transparencia
   const [computedOverUnder, setComputedOverUnder] = useState(null); // { line, overProb, underProb, expectedRuns } — misma idea, para Over/Under
   const [overUnderStatus, setOverUnderStatus] = useState("idle");
@@ -1262,12 +1301,14 @@ function TodayGamesHeader() {
     setComputedWinProb(null);
     setEspnPredictorHomeProb(null);
     setSosDisplay(null);
+    setPitcherVsDisplay(null);
     setWinProbStatus("cargando");
     computeFullHomeWinProb(game).then((result) => {
       const prob = result?.prob ?? null;
       setComputedWinProb(prob);
       setEspnPredictorHomeProb(result?.espnPredictorHomeProb ?? null);
       setSosDisplay(result ? { home: result.homeSOS, away: result.awaySOS } : null);
+      setPitcherVsDisplay(result?.pitcherVs ?? null);
       setWinProbStatus(prob != null ? "listo" : "error");
     });
 
@@ -1560,6 +1601,24 @@ function TodayGamesHeader() {
                   <p className="text-[10px] mb-2" style={{ color: "#5A7368" }}>
                     Predictor real de ESPN para {selectedGame.home}: {(espnPredictorHomeProb * 100).toFixed(1)}% — se mezcla con peso moderado (25%) como referencia externa independiente.
                   </p>
+                )}
+                {pitcherVsDisplay && (
+                  <div className="text-[10px] mb-2 space-y-1" style={{ color: "#5A7368" }}>
+                    <div className="tracking-widest uppercase" style={{ color: "#8FA599" }}>Historial del abridor contra este rival (últimas 5 temporadas)</div>
+                    {[{ side: pitcherVsDisplay.away, opp: selectedGame.home }, { side: pitcherVsDisplay.home, opp: selectedGame.away }].map(({ side, opp }, i) =>
+                      side && side.vsTeam && side.vsTeam.starts > 0 ? (
+                        <div key={i}>
+                          {side.name}: {side.vsTeam.starts} aperturas vs {opp} · decisiones {side.vsTeam.wins}-{side.vsTeam.losses} · ERA {side.vsTeam.era != null ? side.vsTeam.era.toFixed(2) : "—"} ({side.vsTeam.ip} IP) contra {side.overall.era != null ? side.overall.era.toFixed(2) : "—"} en general
+                          {side.vsTeamAtHome.starts > 0 ? ` · en casa ${side.vsTeamAtHome.wins}-${side.vsTeamAtHome.losses}` : ""}
+                          {side.vsTeamOnRoad.starts > 0 ? ` · de visita ${side.vsTeamOnRoad.wins}-${side.vsTeamOnRoad.losses}` : ""}
+                          {` · efecto en la probabilidad: ${side.effect >= 0 ? "+" : ""}${(side.effect * 100).toFixed(1)}%`}
+                        </div>
+                      ) : side ? (
+                        <div key={i}>{side.name}: sin aperturas previas contra {opp} en estas temporadas.</div>
+                      ) : null
+                    )}
+                    <div>El ajuste usa el ERA contra ese equipo vs. su ERA normal (no el G-P, que depende del apoyo ofensivo), regresado a la media por entradas; se activa con 2+ aperturas. El G-P y casa/ruta se muestran como información.</div>
+                  </div>
                 )}
                 {sosDisplay && (sosDisplay.home != null || sosDisplay.away != null) && (
                   <p className="text-[10px] mb-2" style={{ color: "#5A7368" }}>
