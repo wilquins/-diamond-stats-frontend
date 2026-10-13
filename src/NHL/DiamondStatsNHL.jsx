@@ -45,6 +45,38 @@ function goalieEdge(savePct) {
   return Math.max(-0.08, Math.min(0.08, (savePct - NHL_LEAGUE_AVG_SAVE_PCT) * 2.5));
 }
 
+
+// ---- Historial del portero contra el rival de hoy (últimas 5 temporadas,
+// temporada regular, solo aperturas). Fuente: game-log oficial de la NHL.
+// Se activa tras GOALIE_VS_MIN_STARTS aperturas contra ese equipo.
+// DECISIONES SUBJETIVAS (no citadas): GOALIE_VS_SHRINK_SHOTS = 600 tiros
+// (~21 aperturas; no se encontró una cifra publicada de estabilización de
+// save% que usar), tope ±3%, y 1 gol ≈ 1/6 de probabilidad de ganar
+// (~6 goles = 1 victoria, regla estándar de hockey analytics).
+const GOALIE_VS_MIN_STARTS = 2;
+const GOALIE_VS_SHRINK_SHOTS = 600;
+const GOALIE_WIN_PER_GOAL = 1 / 6;
+const GOALIE_VS_CAP = 0.03;
+
+function goalieVsEffect(vs) {
+  const t = vs?.vsTeam, o = vs?.overall;
+  if (!t || !o || t.savePct == null || o.savePct == null || t.starts < GOALIE_VS_MIN_STARTS || !o.starts) return 0;
+  const shotsPerStart = o.shotsAgainst / o.starts;
+  const goalsSaved = (t.savePct - o.savePct) * shotsPerStart; // goles/juego mejor (+) o peor (-) que su normal
+  const shrink = t.shotsAgainst / (t.shotsAgainst + GOALIE_VS_SHRINK_SHOTS);
+  return Math.max(-GOALIE_VS_CAP, Math.min(GOALIE_VS_CAP, goalsSaved * GOALIE_WIN_PER_GOAL * shrink));
+}
+
+// Agrega g.home.vs / g.away.vs (el portero local enfrenta al visitante y viceversa).
+async function enrichGoaliesVs(g, homeCode, awayCode) {
+  if (!g) return g;
+  const get = (goalie, opp) => goalie?.stats?.id
+    ? fetch(`${BACKEND_URL}/api/nhl/goalie/${goalie.stats.id}/vs-team/${opp}`).then((r) => r.json()).then((d) => (d?.error ? null : d)).catch(() => null)
+    : Promise.resolve(null);
+  const [hv, av] = await Promise.all([get(g.home, awayCode), get(g.away, homeCode)]);
+  return { ...g, home: g.home ? { ...g.home, vs: hv } : g.home, away: g.away ? { ...g.away, vs: av } : g.away };
+}
+
 // Calcula la probabilidad real de ganar de un partido de NHL: récord real
 // (Log5 sobre % de puntos) + ventaja de casa + forma reciente real
 // (últimos 10) + récord real de casa del local vs. ruta del visitante +
@@ -142,10 +174,11 @@ async function computeNhlWinProb(home, away, goalies) {
   // El portero del LOCAL detiene tiros del ataque visitante y viceversa —
   // por eso la resta va cruzada: la ventaja neta es el portero de casa
   // MENOS el portero visitante, ambos frente al mismo promedio de liga.
-  const goalieAdj = goalieEdge(goalies?.home?.stats?.savePercentage) - goalieEdge(goalies?.away?.stats?.savePercentage);
+  const goalieVsAdj = goalieVsEffect(goalies?.home?.vs) - goalieVsEffect(goalies?.away?.vs);
+  const goalieAdj = goalieEdge(goalies?.home?.stats?.savePercentage) - goalieEdge(goalies?.away?.stats?.savePercentage) + goalieVsAdj;
 
   const prob = Math.min(0.92, Math.max(0.08, baseProb + homeAdvantage + formAdj + homeRoadAdj + sosAdj + goalieAdj));
-  return { prob, homeAdvantage, formAdj, homeRoadAdj, sosAdj, goalieAdj, homeSchedule, awaySchedule, homeStrength, awayStrength, homeRaw, awayRaw, homePriorWeight: homeBlend.priorWeight, awayPriorWeight: awayBlend.priorWeight };
+  return { prob, homeAdvantage, formAdj, homeRoadAdj, sosAdj, goalieAdj, goalieVsAdj, homeSchedule, awaySchedule, homeStrength, awayStrength, homeRaw, awayRaw, homePriorWeight: homeBlend.priorWeight, awayPriorWeight: awayBlend.priorWeight };
 }
 
 // ---- Distribución de Poisson — mismo modelo que ya usamos en MLB para
@@ -207,10 +240,11 @@ async function predictAndSaveGame(game, map) {
   const away = map[game.awayCode];
   if (!home || !away) return;
   const gameDateET = new Date(game.startTimeUTC).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-  const g = home.fullName && away.fullName
+  let g = home.fullName && away.fullName
     ? await fetch(`${BACKEND_URL}/api/nhl/goalies/${game.homeCode}/${game.awayCode}?date=${gameDateET}&homeName=${encodeURIComponent(home.fullName)}&awayName=${encodeURIComponent(away.fullName)}`)
         .then((r) => r.json()).catch(() => null)
     : null;
+  g = await enrichGoaliesVs(g, game.homeCode, game.awayCode);
   const r = await computeNhlWinProb(home, away, g);
   const ou = computeNhlOverUnder(home, away, g);
   if (r) {
@@ -408,10 +442,11 @@ function GameDetail({ game, onBack }) {
       // ESPN, que es la única fuente real que confirma el titular antes
       // del juego.
       const gameDateET = new Date(game.startTimeUTC).toLocaleDateString("en-CA", { timeZone: "America/New_York" });
-      const g = home.fullName && away.fullName
+      let g = home.fullName && away.fullName
         ? await fetch(`${BACKEND_URL}/api/nhl/goalies/${game.homeCode}/${game.awayCode}?date=${gameDateET}&homeName=${encodeURIComponent(home.fullName)}&awayName=${encodeURIComponent(away.fullName)}`)
             .then((r) => r.json()).catch(() => null)
         : null;
+      g = await enrichGoaliesVs(g, game.homeCode, game.awayCode);
       if (cancelled) return;
       setGoalies(g);
 
@@ -588,6 +623,27 @@ function GameDetail({ game, onBack }) {
                         <>
                           <div>Save%: <b style={{ color: "#C9D6CD" }}>{(g.stats.savePercentage * 100).toFixed(1)}%</b> · GAA: <b style={{ color: "#C9D6CD" }}>{g.stats.goalsAgainstAverage?.toFixed(2)}</b></div>
                           <div>{g.stats.wins}-{g.stats.losses} en {g.stats.gamesPlayed} juegos reales esta temporada</div>
+                          {(() => {
+                            const t = g.vs?.vsTeam, o = g.vs?.overall;
+                            const opp = label === game.homeName ? game.awayName : game.homeName;
+                            if (!t || !o) return null;
+                            if (t.starts === 0) return <div className="mt-1" style={{ color: "#5A7368" }}>Nunca ha abierto contra {opp} en las últimas 5 temporadas.</div>;
+                            const eff = goalieVsEffect(g.vs);
+                            const pct = (v) => (v == null ? "—" : (v * 100).toFixed(1) + "%");
+                            return (
+                              <div className="mt-1 pt-1 border-t" style={{ borderColor: "#1F3D30" }}>
+                                <div style={{ color: "#EDEAE1" }}>Contra {opp} (últ. 5 temporadas)</div>
+                                <div>{t.starts} aperturas: <b style={{ color: "#C9D6CD" }}>{t.wins}-{t.losses}{t.otLosses ? `-${t.otLosses}` : ""}</b> · Save% <b style={{ color: "#C9D6CD" }}>{pct(t.savePct)}</b> (total {pct(o.savePct)}) · GAA <b style={{ color: "#C9D6CD" }}>{t.gaa?.toFixed(2) ?? "—"}</b> (total {o.gaa?.toFixed(2) ?? "—"})</div>
+                                {g.vs.vsTeamAtHome?.starts > 0 && <div>En casa: {g.vs.vsTeamAtHome.wins}-{g.vs.vsTeamAtHome.losses}{g.vs.vsTeamAtHome.otLosses ? `-${g.vs.vsTeamAtHome.otLosses}` : ""} · Save% {pct(g.vs.vsTeamAtHome.savePct)}</div>}
+                                {g.vs.vsTeamOnRoad?.starts > 0 && <div>De visita: {g.vs.vsTeamOnRoad.wins}-{g.vs.vsTeamOnRoad.losses}{g.vs.vsTeamOnRoad.otLosses ? `-${g.vs.vsTeamOnRoad.otLosses}` : ""} · Save% {pct(g.vs.vsTeamOnRoad.savePct)}</div>}
+                                <div style={{ color: t.starts >= GOALIE_VS_MIN_STARTS ? "#FFB627" : "#5A7368" }}>
+                                  {t.starts >= GOALIE_VS_MIN_STARTS
+                                    ? `Efecto en la probabilidad: ${eff >= 0 ? "+" : ""}${(eff * 100).toFixed(1)}% (pocas aperturas pesan poco)`
+                                    : `Aún no cuenta: se activa desde ${GOALIE_VS_MIN_STARTS} aperturas contra este rival.`}
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </>
                       ) : (
                         <div style={{ color: "#5A7368" }}>Sin stats reales cruzadas todavía.</div>
